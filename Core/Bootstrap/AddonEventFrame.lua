@@ -1,0 +1,133 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local EventUtils = ns.EventUtils or require("Susurrus.Core.EventUtils")
+local LockdownCatcher = ns.BootstrapLockdownCatcher or require("Susurrus.Core.Bootstrap.LockdownCatcher")
+
+local AddonEventFrame = {}
+
+local function resolveModule(currentValue, namespaceKey, loadModule, moduleName, moduleKey)
+  if currentValue then
+    return currentValue
+  end
+
+  return ns[namespaceKey] or loadModule(moduleName, moduleKey)
+end
+
+function AddonEventFrame.Install(deps)
+  deps = deps or {}
+
+  local Bootstrap = deps.Bootstrap or {}
+  local createFrame = deps.createFrame or _G.CreateFrame
+  if type(createFrame) ~= "function" then
+    return nil
+  end
+
+  local loadModule = deps.loadModule or function(name, key)
+    error((key or name or "module") .. " module not available")
+  end
+  local initializeRuntime = deps.initializeRuntime or function()
+    return Bootstrap.runtime
+  end
+  local targetAddonName = deps.addonName or addonName
+
+  local loadFrame = createFrame("Frame", "SusurrusLoadFrame")
+  Bootstrap._loadFrame = loadFrame
+  LockdownCatcher.Install({ createFrame = createFrame, Bootstrap = Bootstrap })
+
+  local EventBridge = ns.BootstrapEventBridge
+  local LifecycleHandlers = ns.BootstrapLifecycleHandlers
+
+  -- Built once: the OnEvent dispatcher runs for every live chat/addon-comm
+  -- event, so allocating this table and its closures per event would be
+  -- steady GC churn in raids.
+  local lifecycleDeps = {
+    loadModule = loadModule,
+    getContentDetector = function()
+      return ns.ContentDetector
+    end,
+    getPresenceCache = function()
+      return ns.PresenceCache
+    end,
+  }
+
+  loadFrame:RegisterEvent("ADDON_LOADED")
+  loadFrame:SetScript("OnEvent", function(_, event, ...)
+    if event == "ADDON_LOADED" then
+      local loadedAddonName = ...
+      if loadedAddonName ~= targetAddonName then
+        return
+      end
+
+      initializeRuntime()
+
+      EventBridge =
+        resolveModule(EventBridge, "BootstrapEventBridge", loadModule, "Susurrus.Core.Bootstrap.EventBridge", "BootstrapEventBridge")
+      EventBridge.RegisterLiveEvents(loadFrame)
+      EventBridge.RegisterChannelEvents(loadFrame)
+      EventBridge.RegisterGroupEvents(loadFrame)
+
+      local runtime = Bootstrap.runtime
+      if runtime and runtime.autoOpenCoordinator then
+        runtime.autoOpenCoordinator.installDeferredPoller()
+      end
+
+      local Constants = loadModule("Susurrus.Core.Constants", "Constants")
+      for _, eventName in ipairs(Constants.LIFECYCLE_EVENT_NAMES) do
+        EventUtils.RegisterEventIfSupported(loadFrame, eventName)
+      end
+
+      if loadFrame.UnregisterEvent then
+        loadFrame:UnregisterEvent("ADDON_LOADED")
+      end
+
+      return
+    end
+
+    -- Route channel messages directly to the store (bypass whisper pipeline)
+    EventBridge =
+      resolveModule(EventBridge, "BootstrapEventBridge", loadModule, "Susurrus.Core.Bootstrap.EventBridge", "BootstrapEventBridge")
+    if EventBridge and EventBridge.RouteChannelEvent then
+      local runtime = Bootstrap.runtime
+      if EventBridge.RouteChannelEvent(runtime, event, ...) then
+        return
+      end
+    end
+
+    if EventBridge and EventBridge.RouteGroupEvent then
+      local runtime = Bootstrap.runtime
+      if EventBridge.RouteGroupEvent(runtime, event, ...) then
+        return
+      end
+    end
+
+    LifecycleHandlers = resolveModule(
+      LifecycleHandlers,
+      "BootstrapLifecycleHandlers",
+      loadModule,
+      "Susurrus.Core.Bootstrap.LifecycleHandlers",
+      "BootstrapLifecycleHandlers"
+    )
+    if LifecycleHandlers and LifecycleHandlers.Handle(Bootstrap, event, lifecycleDeps, ...) then
+      return
+    end
+
+    if Bootstrap._inMythicContent then
+      return
+    end
+
+    EventBridge =
+      resolveModule(EventBridge, "BootstrapEventBridge", loadModule, "Susurrus.Core.Bootstrap.EventBridge", "BootstrapEventBridge")
+    if EventBridge then
+      local runtime = Bootstrap.runtime
+      EventBridge.RouteLiveEvent(runtime, runtime and runtime.refreshWindow or nil, event, ...)
+    end
+  end)
+
+  return loadFrame
+end
+
+ns.BootstrapAddonEventFrame = AddonEventFrame
+return AddonEventFrame

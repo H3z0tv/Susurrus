@@ -1,0 +1,53 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Base = ns.UIHelpersBase or require("Susurrus.UI.Helpers.Base")
+local Shapes = ns.UIHelpersShapes or require("Susurrus.UI.Helpers.Shapes")
+local Controls = ns.UIHelpersControls or require("Susurrus.UI.Helpers.Controls")
+local DisabledState = ns.UIHelpersDisabledState or require("Susurrus.UI.Helpers.DisabledState")
+
+-- Strictly true: a stubbed or odd return value never counts as shift.
+local function isShiftDown()
+  return type(_G.IsShiftKeyDown) == "function" and _G.IsShiftKeyDown() == true
+end
+
+local UIHelpers = {
+  TRANSPARENT = Base.TRANSPARENT,
+  setBorderEdgesShown = Base.setBorderEdgesShown,
+  hoverButtonFill = Base.hoverButtonFill,
+  applyHorizontalFade = Base.applyHorizontalFade,
+  applyHorizontalFadeLeft = Base.applyHorizontalFadeLeft,
+  applyVerticalFade = Base.applyVerticalFade,
+  applyVerticalFadeDown = Base.applyVerticalFadeDown,
+  createSheen = Shapes.createSheen,
+  applySheen = Shapes.applySheen,
+  sizeValue = Base.sizeValue,
+  createTemplatedFrame = Base.createTemplatedFrame,
+  applyColor = Base.applyColor,
+  applyColorTexture = Base.applyColorTexture,
+  applyBorderBoxColor = Base.applyBorderBoxColor,
+  applyVertexColor = Base.applyVertexColor,
+  colorEscape = Base.colorEscape,
+  applyClassColor = Base.applyClassColor,
+  captureFramePosition = Base.captureFramePosition,
+  setFontObject = Base.setFontObject,
+  setTextColor = Base.setTextColor,
+  fitTextWithEllipsis = Base.fitTextWithEllipsis,
+  createBorderBox = Shapes.createBorderBox,
+  hairlineThickness = Shapes.hairlineThickness,
+  snapToPixelGrid = Shapes.snapToPixelGrid,
+  polishBadge = Shapes.polishBadge,
+  createCircularIcon = Shapes.createCircularIcon,
+  resizeCircularIcon = Shapes.resizeCircularIcon,
+  createRoundedBackground = Shapes.createRoundedBackground,
+  createOptionButton = Controls.createOptionButton,
+  createToggleRow = Controls.createToggleRow,
+  attachDisabledState = DisabledState.Attach,
+  isShiftDown = isShiftDown,
+}
+
+ns.UIHelpers = UIHelpers
+
+return UIHelpers

@@ -1,0 +1,132 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local IconSurfaces = ns.BootstrapWindowCoordinatorIconSurfaces or require("Susurrus.Core.Bootstrap.WindowCoordinator.IconSurfaces")
+local ToggleIcon = ns.ToggleIcon or require("Susurrus.UI.ToggleIcon")
+local TableUtils = ns.TableUtils or require("Susurrus.Util.TableUtils")
+
+local IconRuntime = {}
+
+local function resolveAutoDismissSeconds(settings)
+  local value = settings.widgetPreviewAutoDismissSeconds
+  if value == nil then
+    return 30
+  end
+  return tonumber(value) or 0
+end
+
+local function resolvePreviewPosition(settings)
+  local value = settings.widgetPreviewPosition
+  if type(value) ~= "string" or value == "" then
+    return "right"
+  end
+  return value
+end
+
+-- Shared with MinimapIconRuntime so preview defaults live in one place.
+IconRuntime.ResolveAutoDismissSeconds = resolveAutoDismissSeconds
+IconRuntime.ResolvePreviewPosition = resolvePreviewPosition
+
+-- panelRegistry: a surface created after panels registered shows their
+-- badges at once, not on the next icon refresh.
+local function initializeIconState(icon, contacts, panelRegistry, buildLatestIncomingPreview)
+  local total, unread = IconSurfaces.Counts(contacts, panelRegistry)
+  IconSurfaces.ShowCounts(total, unread, icon)
+
+  if icon and icon.setIncomingPreview then
+    local preview = buildLatestIncomingPreview(contacts)
+    icon.setIncomingPreview(preview and preview.senderName or nil, preview and preview.messageText or nil, preview and preview.classTag or nil)
+  end
+end
+
+function IconRuntime.Create(options)
+  options = options or {}
+
+  local accountState = options.accountState or {}
+  local settings = accountState.settings or {}
+  local characterState = options.characterState or {}
+  local uiFactory = options.uiFactory or _G
+  local toggleIcon = options.toggleIcon or ToggleIcon
+  local tableUtils = options.tableUtils or TableUtils
+  local runtime = options.runtime or {}
+  local buildContacts = options.buildContacts or function()
+    return {}
+  end
+  local buildLatestIncomingPreview = options.buildLatestIncomingPreview or function()
+    return nil
+  end
+  local acknowledgeLatestWidgetPreview = options.acknowledgeLatestWidgetPreview or function() end
+  local refreshWindow = options.refreshWindow or function() end
+  local onToggle = options.onToggle or function() end
+
+  local function isSharingWidgetPosition()
+    return accountState.settings and accountState.settings.shareWidgetPosition == true
+  end
+
+  local function getActiveIconState()
+    if not isSharingWidgetPosition() then
+      return characterState.icon
+    end
+
+    if accountState.sharedWidgetPosition == nil then
+      accountState.sharedWidgetPosition = tableUtils.copyState(characterState.icon)
+    end
+    return accountState.sharedWidgetPosition
+  end
+
+  local function dismissWidgetPreview()
+    acknowledgeLatestWidgetPreview(buildContacts())
+    return refreshWindow()
+  end
+
+  local icon = toggleIcon.Create(uiFactory, {
+    state = getActiveIconState(),
+    iconSize = settings.iconSize,
+    onToggle = onToggle,
+    onMarkAllRead = options.onMarkAllRead,
+    onPositionChanged = function(nextState)
+      local persistedState = tableUtils.copyState(nextState)
+      if isSharingWidgetPosition() then
+        accountState.sharedWidgetPosition = persistedState
+      else
+        characterState.icon = persistedState
+      end
+    end,
+    getShowUnreadBadge = function()
+      return settings.showUnreadBadge ~= false
+    end,
+    getBadgePulse = function()
+      return settings.badgePulse ~= false
+    end,
+    getIconDesaturated = function()
+      return settings.iconDesaturated ~= false
+    end,
+    getWidgetTransparency = function()
+      return settings.widgetTransparency or 0
+    end,
+    getIsLocked = function()
+      return settings.lockToggleIcon == true
+    end,
+    getHideFromDefaultChat = function()
+      return settings.hideFromDefaultChat == true
+    end,
+    getPreviewAutoDismissSeconds = function()
+      return resolveAutoDismissSeconds(settings)
+    end,
+    getPreviewPosition = function()
+      return resolvePreviewPosition(settings)
+    end,
+    onDismissPreview = dismissWidgetPreview,
+    onOpenPreview = options.onOpenPreview,
+  })
+
+  initializeIconState(icon, buildContacts(), runtime.panelRegistry, buildLatestIncomingPreview)
+
+  return icon
+end
+
+ns.BootstrapWindowRuntimeIconRuntime = IconRuntime
+
+return IconRuntime

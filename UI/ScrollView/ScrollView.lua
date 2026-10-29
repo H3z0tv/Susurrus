@@ -1,0 +1,20 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Metrics = ns.ScrollViewMetrics or require("Susurrus.UI.ScrollView.Metrics")
+local Navigation = ns.ScrollViewNavigation or require("Susurrus.UI.ScrollView.Navigation")
+local Factory = ns.ScrollViewFactory or require("Susurrus.UI.ScrollView.Factory")
+
+local ScrollView = {}
+ScrollView.GetRange = Metrics.GetRange
+ScrollView.GetOffset = Metrics.GetOffset
+ScrollView.RefreshMetrics = Metrics.RefreshMetrics
+ScrollView.Resize = Metrics.Resize
+ScrollView.Sync = Navigation.Sync
+ScrollView.SetVerticalScroll = Navigation.SetVerticalScroll
+ScrollView.Create = Factory.Create
+
+ns.ScrollView = ScrollView
+return ScrollView

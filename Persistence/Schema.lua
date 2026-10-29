@@ -1,0 +1,45 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Schema = {}
+
+function Schema.NewAccountState()
+  return {
+    schemaVersion = 1,
+    conversations = {},
+    contacts = {},
+    pendingHydration = {},
+    channelMessages = {},
+    filters = { ignored = {}, rules = {} },
+  }
+end
+
+function Schema.NewCharacterState()
+  return {
+    window = {
+      anchorPoint = "CENTER",
+      relativePoint = "CENTER",
+      x = 0,
+      y = 0,
+      width = 900,
+      height = 560,
+      contactsWidth = 300,
+      -- Contacts pane collapsed to the icon rail (contactsWidth stays the
+      -- expanded width to return to).
+      contactsCollapsed = false,
+      minimized = false,
+    },
+    icon = { anchorPoint = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
+    minimapIcon = { degrees = 45 },
+    activeConversationKey = nil,
+    -- Last-selected Whispers/Groups tab mode, persisted per character.
+    -- (showGroupChats is account-wide — lives in accountState.settings.)
+    contactsTabMode = "whispers",
+  }
+end
+
+ns.Schema = Schema
+
+return Schema

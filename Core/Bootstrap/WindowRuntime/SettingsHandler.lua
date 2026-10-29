@@ -1,0 +1,293 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ChatReplyState = ns.ChatReplyState or (type(require) == "function" and require("Susurrus.Util.ChatReplyState")) or nil
+local Localization = ns.Localization or (type(require) == "function" and require("Susurrus.Locale.Localization")) or nil
+local IconSurfaces = ns.BootstrapWindowCoordinatorIconSurfaces or require("Susurrus.Core.Bootstrap.WindowCoordinator.IconSurfaces")
+local Store = ns.ConversationStore or (type(require) == "function" and require("Susurrus.Model.ConversationStore")) or nil
+local ConversationSnapshot = ns.ConversationSnapshot or require("Susurrus.Model.ConversationSnapshot")
+local HudStyleSetting = ns.BootstrapWindowRuntimeHudStyleSetting or require("Susurrus.Core.Bootstrap.WindowRuntime.HudStyleSetting")
+local IntegrationSetting = ns.BootstrapWindowRuntimeIntegrationSetting or require("Susurrus.Core.Bootstrap.WindowRuntime.IntegrationSetting")
+local DisplayNameSetting = ns.BootstrapWindowRuntimeDisplayNameSetting or require("Susurrus.Core.Bootstrap.WindowRuntime.DisplayNameSetting")
+local DisplayName = ns.DisplayName or (type(require) == "function" and require("Susurrus.Util.DisplayName")) or nil
+local WindowScale = ns.MessengerWindowWindowScale
+  or (type(require) == "function" and require("Susurrus.UI.MessengerWindow.WindowScale"))
+  or nil
+
+local RETENTION_SETTING_KEYS = {
+  maxMessagesPerConversation = true,
+  maxConversations = true,
+  messageMaxAge = true,
+}
+
+local SettingsHandler = {}
+
+function SettingsHandler.Create(options)
+  options = options or {}
+
+  local runtime = options.runtime or {}
+  local accountSettings = options.accountSettings or {}
+  local theme = options.theme or {}
+  local fonts = options.fonts or {}
+  local timeFormat = options.timeFormat or {}
+  local localization = options.localization or Localization or {}
+  local displayName = options.displayName or DisplayName or {}
+  local windowScale = options.windowScale or WindowScale or {}
+  local getIcon = options.getIcon or function()
+    return nil
+  end
+  local buildContacts = options.buildContacts or function()
+    return {}
+  end
+  local getNumChatWindows = options.getNumChatWindows or function()
+    return _G.NUM_CHAT_WINDOWS or 10
+  end
+  local getEditBox = options.getEditBox or function(index)
+    return _G["ChatFrame" .. index .. "EditBox"]
+  end
+  local onShareWidgetPositionChanged = options.onShareWidgetPositionChanged
+
+  return function(key, value)
+    -- Not a setting: the Filters page changed the ignore list or rules.
+    if key == "filters" then
+      if runtime.syncChatFilters then
+        runtime.syncChatFilters()
+      end
+      -- The open whisper's header shows whether that player is blocked.
+      if runtime.refreshWindow then
+        runtime.refreshWindow()
+      end
+      return
+    end
+    -- Saved by HudStyleSetting only when the player reloads.
+    if key == "hudStyle" then
+      HudStyleSetting.Apply(accountSettings, value, function(savedStyle)
+        local appearance = runtime.window and runtime.window.appearanceSettings
+        if appearance and appearance.setHudStyle then
+          appearance.setHudStyle(savedStyle)
+        end
+      end)
+      return
+    end
+    if key == "allowAddonIntegration" then
+      IntegrationSetting.Apply(accountSettings, value, runtime)
+      return
+    end
+    local persistedValue = value
+    if key == "windowScale" and windowScale.Normalize then
+      persistedValue = windowScale.Normalize(value)
+    end
+    local themeApplied = false
+
+    if key == "themePreset" then
+      local fallbackKey = theme.DEFAULT_PRESET or "wow_default"
+      local presetKey = value or fallbackKey
+      persistedValue = presetKey
+      if theme.ResolvePreset then
+        local resolvedKey, applied = theme.ResolvePreset(presetKey)
+        persistedValue = resolvedKey or presetKey
+        themeApplied = applied == true
+      end
+    end
+
+    accountSettings[key] = persistedValue
+
+    if key ~= "windowScale" and runtime.store.config[key] ~= nil then
+      runtime.store.config[key] = persistedValue
+    end
+    if key == "messageMaxAge" then
+      runtime.store.config.conversationMaxAge = persistedValue
+    end
+
+    if RETENTION_SETTING_KEYS[key] and Store and Store.ApplyRetention then
+      local activeKey = runtime.activeConversationKey
+      local now = runtime.now and runtime.now() or nil
+      local removed = Store.ApplyRetention(runtime.store, now, activeKey)
+      if activeKey ~= nil and removed[activeKey] then
+        runtime.activeConversationKey = nil
+        if runtime.characterState then
+          runtime.characterState.activeConversationKey = nil
+        end
+      end
+      if runtime.refreshWindow then
+        runtime.refreshWindow()
+      end
+    end
+
+    if key == "windowScale" then
+      local window = runtime.window
+      if window and window.setScale then
+        window.setScale(persistedValue)
+      end
+    end
+
+    if key == "shareWidgetPosition" and onShareWidgetPositionChanged then
+      onShareWidgetPositionChanged(persistedValue)
+    end
+
+    if key == "fontFamily" and fonts.SetMode then
+      fonts.SetMode(persistedValue or "default")
+    end
+    if key == "fontSize" and fonts.SetFontSize then
+      fonts.SetFontSize(persistedValue or 12)
+    end
+    if key == "fontOutline" and fonts.SetOutline then
+      fonts.SetOutline(persistedValue or "NONE")
+    end
+    if key == "fontColor" and fonts.SetFontColor then
+      fonts.SetFontColor(persistedValue or "default")
+    end
+    if key == "bubbleColorPreset" and theme.SetBubblePreset then
+      theme.SetBubblePreset(persistedValue or "default")
+    end
+    if (key == "timeFormat" or key == "timeSource") and timeFormat.Configure then
+      timeFormat.Configure({ [key] = persistedValue })
+    end
+    DisplayNameSetting.Apply(displayName, key, persistedValue, runtime.seenLevelEvents)
+    if key == "interfaceLanguage" then
+      if localization.Configure then
+        localization.Configure({ language = persistedValue })
+      end
+      -- Korean and Chinese locales need a CJK-capable font path; the
+      -- default FRIZQT / ARIALN / MORPHEUS files contain no CJK glyphs
+      -- and render as squares. Update the font swap before refreshing
+      -- so the next paint uses the correct face.
+      if fonts.SetLanguage then
+        fonts.SetLanguage(persistedValue)
+      end
+      -- Configure() must run first so child widgets re-resolve from the new
+      -- catalog. refreshLanguage carries the explicit language so the
+      -- General panel's languageOverride-based text() helper sees the user's
+      -- choice instead of the "auto" default.
+      if runtime.window and runtime.window.refreshLanguage then
+        runtime.window.refreshLanguage(persistedValue)
+      end
+    end
+    if (key == "hideFromDefaultChat" or key == "hideChannelsFromDefaultChat" or key == "enabledChannels") and runtime.syncChatFilters then
+      runtime.syncChatFilters()
+    end
+    if key == "hideFromDefaultChat" and runtime.syncReplyKey then
+      runtime.syncReplyKey()
+    end
+    if key == "autoOpenOutgoing" and persistedValue == true and ChatReplyState then
+      ChatReplyState.ClearStaleWhisperReplyState(getNumChatWindows, getEditBox)
+    end
+    if key == "showGroupChats" then
+      local window = runtime.window
+      if persistedValue == false and window and window.getTabMode and window.getTabMode() == "groups" and window.setTabMode then
+        window.setTabMode("whispers")
+      end
+      if window and window.refreshTabToggleVisibility then
+        window.refreshTabToggleVisibility()
+      end
+      if runtime.refreshWindow then
+        runtime.refreshWindow()
+      end
+    end
+    if key == "requestsInbox" then
+      local window = runtime.window
+      if persistedValue ~= true and window and window.getTabMode and window.getTabMode() == "requests" and window.setTabMode then
+        window.setTabMode("whispers")
+      end
+      if window and window.refreshTabToggleVisibility then
+        window.refreshTabToggleVisibility()
+      end
+      if runtime.refreshWindow then
+        runtime.refreshWindow()
+      end
+    end
+    if key == "enabledChannels" then
+      local window = runtime.window
+      local hasTab = ConversationSnapshot.HasChannelsTab(accountSettings)
+      if not hasTab and window and window.getTabMode and window.getTabMode() == "channels" and window.setTabMode then
+        window.setTabMode("whispers")
+      end
+      if window and window.refreshTabToggleVisibility then
+        window.refreshTabToggleVisibility()
+      end
+    end
+    if
+      (
+        key == "hideMessagePreview"
+        or key == "hideBattleTagNumbers"
+        or key == "showPlayerLevels"
+        or key == "showWidgetMessagePreview"
+        or key == "fontFamily"
+        or key == "fontSize"
+        or key == "fontOutline"
+        or key == "fontColor"
+        or key == "bubbleColorPreset"
+        or key == "timeFormat"
+        or key == "timeSource"
+        or key == "interfaceLanguage"
+        or key == "enabledChannels"
+        or key == "showInviteLink"
+      ) and runtime.refreshWindow
+    then
+      runtime.refreshWindow()
+    end
+
+    if key == "themePreset" and themeApplied then
+      if runtime.window and runtime.window.refreshTheme then
+        runtime.window.refreshTheme()
+      end
+      local themeIcon = getIcon()
+      if themeIcon and themeIcon.refreshTheme then
+        themeIcon.refreshTheme()
+      end
+      local minimapIcon = options.getMinimapIcon and options.getMinimapIcon()
+      if minimapIcon and minimapIcon.refreshTheme then
+        minimapIcon.refreshTheme()
+      end
+      if runtime.refreshWindow then
+        runtime.refreshWindow()
+      end
+    end
+
+    local icon = getIcon()
+    local minimap = options.getMinimapIcon and options.getMinimapIcon()
+    -- The icon refresh's count; each icon resyncs alone (no starved minimap).
+    if (key == "showUnreadBadge" or key == "badgePulse") and (icon or minimap) then
+      local total, unread = IconSurfaces.Counts(buildContacts(), runtime.panelRegistry)
+      IconSurfaces.ShowCounts(total, unread, icon, minimap)
+    end
+
+    if key == "iconMode" and options.applyIconMode then
+      options.applyIconMode()
+    end
+
+    if key == "iconSize" and icon and icon.applyIconSize then
+      icon.applyIconSize(persistedValue)
+    end
+
+    if key == "iconDesaturated" then
+      if icon and icon.refreshDesaturation then
+        icon.refreshDesaturation()
+      end
+      if minimap and minimap.refreshDesaturation then
+        minimap.refreshDesaturation()
+      end
+    end
+    if key == "widgetTransparency" and icon and icon.refreshTransparency then
+      icon.refreshTransparency()
+    end
+    if key == "lockToggleIcon" and icon and icon.refreshLockGlyph then
+      icon.refreshLockGlyph()
+    end
+
+    if key == "widgetPreviewPosition" then
+      if icon and icon.applyPreviewPosition then
+        icon.applyPreviewPosition(persistedValue)
+      end
+      if minimap and minimap.applyPreviewPosition then
+        minimap.applyPreviewPosition(persistedValue)
+      end
+    end
+  end
+end
+
+ns.BootstrapWindowRuntimeSettingsHandler = SettingsHandler
+
+return SettingsHandler

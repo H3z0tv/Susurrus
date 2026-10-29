@@ -1,0 +1,218 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
+local sizeValue = UIHelpers.sizeValue
+
+local Apply = {}
+
+function Apply.Relayout(layout, relayout, theme)
+  local resolvedTheme = theme or Theme
+  local layoutTheme = resolvedTheme.LAYOUT or {}
+
+  local contactsWidth = relayout.contactsWidth
+  local contactsHeight = relayout.contactsHeight
+  local contentWidth = relayout.contentWidth
+  local contentHeight = relayout.contentHeight
+  local threadHeight = relayout.threadHeight
+  local searchHeight = relayout.searchHeight
+  local searchMargin = relayout.searchMargin
+  local searchTotalHeight = relayout.searchTotalHeight
+  local contactsListHeight = relayout.contactsListHeight
+
+  layout.contactsWidth = contactsWidth
+  layout.expandedContactsWidth = relayout.expandedContactsWidth or contactsWidth
+
+  layout.contactsPane:SetSize(contactsWidth, contactsHeight)
+  -- Re-anchor so the pane keeps its edge insets after every relayout.
+  local contactsPaneParent = layout.contactsPane.GetParent and layout.contactsPane:GetParent() or layout.contactsPane.parent
+  if contactsPaneParent and layout.contactsPane.ClearAllPoints then
+    layout.contactsPane:ClearAllPoints()
+    layout.contactsPane:SetPoint(
+      "TOPLEFT",
+      contactsPaneParent,
+      "TOPLEFT",
+      layoutTheme.CONTACTS_PANE_LEFT_INSET,
+      layout.contactsTopOffset or -layoutTheme.TOP_BAR_HEIGHT
+    )
+    layout.contactsPane:SetPoint(
+      "BOTTOMLEFT",
+      contactsPaneParent,
+      "BOTTOMLEFT",
+      layoutTheme.CONTACTS_PANE_BOTTOM_LEFT_INSET,
+      layoutTheme.CONTACTS_PANE_BOTTOM_INSET
+    )
+  end
+  layout.contactsDivider:SetSize(UIHelpers.hairlineThickness(layout.contactsDivider, resolvedTheme.DIVIDER_THICKNESS), contactsHeight)
+  if layout.contactsResizeHandle then
+    local handleWidth =
+      sizeValue(layout.contactsResizeHandle, "GetWidth", "width", layout.contactsHandleWidth or Theme.LAYOUT.CONTACTS_RESIZE_HANDLE_WIDTH)
+    layout.contactsResizeHandle:SetSize(handleWidth, contactsHeight)
+    if layout.contactsResizeHandle.ClearAllPoints then
+      layout.contactsResizeHandle:ClearAllPoints()
+    end
+    layout.contactsResizeHandle:SetPoint("TOPLEFT", layout.contactsPane, "TOPRIGHT", -math.floor(handleWidth / 2), 0)
+    -- Re-lift above the pane on every relayout: the window's own level moves
+    -- when it is raised, and rail rows or the chat edge must never cover it.
+    if layout.contactsResizeHandle.SetFrameLevel and layout.contactsPane.GetFrameLevel then
+      layout.contactsResizeHandle:SetFrameLevel(layout.contactsPane:GetFrameLevel() + layoutTheme.CONTACTS_RESIZE_HANDLE_LEVEL_LIFT)
+    end
+  end
+  -- The tab strip is a window child: re-lift it to where it sat as a pane
+  -- child so the HUD border never covers the tab tops.
+  if layout.contactsTabStrip and layout.contactsTabStrip.SetFrameLevel and layout.contactsPane.GetFrameLevel then
+    layout.contactsTabStrip:SetFrameLevel(layout.contactsPane:GetFrameLevel() + 1)
+  end
+
+  if layout.contactsSearchFrame then
+    local insetX = resolvedTheme.LAYOUT.CONTACT_SEARCH_INSET_X or searchMargin
+    layout.contactsSearchFrame:SetSize(math.max(0, contactsWidth - (insetX * 2)), searchHeight)
+    if layout.contactsSearchFrame.ClearAllPoints then
+      layout.contactsSearchFrame:ClearAllPoints()
+    end
+    layout.contactsSearchFrame:SetPoint("TOPLEFT", layout.contactsPane, "TOPLEFT", insetX, -searchMargin)
+  end
+
+  layout.contentPane:SetSize(contentWidth, contentHeight)
+  if layout.contentPane.ClearAllPoints then
+    layout.contentPane:ClearAllPoints()
+  end
+  layout.contentPane:SetPoint("TOPLEFT", layout.contactsPane, "TOPRIGHT", resolvedTheme.DIVIDER_THICKNESS, 0)
+  -- Re-establish the dual-anchor so contentPane stays auto-sized to its
+  -- parent after a resize. Without this the BOTTOMRIGHT anchor is lost on
+  -- every relayout, height/width/margin collapse. Use :GetParent() in
+  -- production WoW; fake_ui falls back to the stored .parent field.
+  local contentParentForAnchor
+  if layout.contactsPane then
+    if type(layout.contactsPane.GetParent) == "function" then
+      contentParentForAnchor = layout.contactsPane:GetParent()
+    end
+    if contentParentForAnchor == nil then
+      contentParentForAnchor = layout.contactsPane.parent
+    end
+  end
+  if contentParentForAnchor then
+    layout.contentPane:SetPoint(
+      "BOTTOMRIGHT",
+      contentParentForAnchor,
+      "BOTTOMRIGHT",
+      -Theme.LAYOUT.CONTENT_PANE_RIGHT_INSET,
+      Theme.LAYOUT.CONTENT_PANE_BOTTOM_INSET
+    )
+  end
+  if layout.headerDivider then
+    layout.headerDivider:SetSize(contentWidth, UIHelpers.hairlineThickness(layout.headerDivider, resolvedTheme.DIVIDER_THICKNESS))
+  end
+  layout.threadPane:SetSize(contentWidth, threadHeight)
+  -- composerPane width tracks contentPane's *actual* current width (after
+  -- contentPane's dual-anchor settles). Reading live geometry instead of
+  -- `contentWidth` (the precomputed full content width) means the SetSize
+  -- matches the dual-anchor in production WoW where contentPane is
+  -- shorter than `contentWidth` by CONTENT_PANE_RIGHT_INSET.
+  local contentPaneWidth = (layout.contentPane.GetWidth and layout.contentPane:GetWidth()) or layout.contentPane.width or contentWidth
+  layout.composerPane:SetSize(contentPaneWidth, resolvedTheme.COMPOSER_HEIGHT)
+  if layout.composerPane.ClearAllPoints then
+    layout.composerPane:ClearAllPoints()
+    layout.composerPane:SetPoint("BOTTOMLEFT", layout.contentPane, "BOTTOMLEFT", 0, 0)
+    layout.composerPane:SetPoint("BOTTOMRIGHT", layout.contentPane, "BOTTOMRIGHT", 0, 0)
+  end
+
+  -- Resize contacts scroll view while preserving its content height and scroll position.
+  local cv = layout.contactsView
+  if cv then
+    local rightInset = layout.nativeChrome and resolvedTheme.LAYOUT.HUD_PANEL_PADDING or 0
+    local listWidth = contactsWidth - rightInset
+    cv.totalWidth = listWidth
+    if cv.scrollFrame.ClearAllPoints then
+      cv.scrollFrame:ClearAllPoints()
+    end
+    -- SetSize keeps the calculated height in sync with layout metrics (and
+    -- with our fake_ui harness, which doesn't derive size from anchors).
+    -- The extra BOTTOMLEFT anchor below is a WoW-only safety net: in the
+    -- live client it pins the viewport's bottom to the pane regardless of
+    -- any small mismatch between contactsListHeight and the pane's real
+    -- height, so rows can't paint past the pane border. No right-side
+    -- anchor: the width must stay free to narrow for the scrollbar.
+    cv.scrollFrame:SetPoint("TOPLEFT", layout.contactsPane, "TOPLEFT", 0, -searchTotalHeight)
+    cv.scrollFrame:SetSize(listWidth, contactsListHeight)
+    -- The viewport is full width again; RefreshMetrics narrows it for the bar.
+    cv.hasOverflow = false
+    cv.scrollFrame:SetPoint("BOTTOMLEFT", layout.contactsPane, "BOTTOMLEFT", 0, relayout.contactsBottomInset or 0)
+    cv.scrollBar:SetHeight(contactsListHeight)
+    cv.viewportHeight = contactsListHeight
+    local Metrics = ns.ScrollViewMetrics or require("Susurrus.UI.ScrollView.Metrics")
+    -- Size from the rows, not the content: a short list's content was
+    -- filled to the old viewport and would keep a shrunk window scrolling.
+    Metrics.RefreshMetrics(cv, cv.content.rowsHeight or sizeValue(cv.content, "GetHeight", "height", contactsListHeight))
+  end
+
+  -- Resize options overlay to match new window dimensions. optionsPanel's
+  -- size is fully driven by its dual-anchor (TOPLEFT + BOTTOMRIGHT to
+  -- parent) — DON'T call SetSize on it, that would override the anchor
+  -- with the outer windowWidth (which is wider than Inset under the HUD)
+  -- and overflow the gold border.
+  -- The HUD options panel sits HUD_PANEL_PADDING inside the content area at
+  -- top and bottom; a taller viewport would hang over the window border.
+  local optionsHeight = layout.nativeChrome and (contactsHeight - 2 * resolvedTheme.LAYOUT.HUD_PANEL_PADDING) or contactsHeight
+  -- Inner content width (Metrics): options panel width minus the menu
+  -- column + divider.
+  local optionsContentWidth = relayout.optionsContentWidth
+  -- The settings nav keeps the expanded width while the contacts pane is the rail.
+  local optionsMenuWidth = relayout.optionsMenuWidth or contactsWidth
+  layout.optionsMenu:SetSize(optionsMenuWidth, optionsHeight)
+  layout.optionsMenuDivider:SetSize(resolvedTheme.DIVIDER_THICKNESS, optionsHeight)
+  layout.optionsContentPane:SetSize(optionsContentWidth, optionsHeight)
+  layout.refreshOptionsMenuScrollGeometry()
+
+  local menuPadding = layout.menuPadding or resolvedTheme.CONTENT_PADDING
+  local optionsButtonWidth = math.max(0, optionsMenuWidth - (menuPadding * 2))
+  local optionsButtonHeight = layout.optionsButtonHeight or layoutTheme.OPTION_BUTTON_HEIGHT
+  if layout.optionsHint then
+    if layout.optionsHint.SetWidth then
+      layout.optionsHint:SetWidth(optionsButtonWidth)
+    end
+    if layout.optionsHint.SetWordWrap then
+      layout.optionsHint:SetWordWrap(true)
+    end
+    if layout.optionsHint.SetJustifyH then
+      layout.optionsHint:SetJustifyH("LEFT")
+    end
+  end
+  local optionButtons = {}
+  for _, tab in ipairs(layout.settingsTabs or {}) do
+    optionButtons[#optionButtons + 1] = tab
+  end
+  for _, key in ipairs({ "resetWindowButton", "resetIconButton", "clearAllChatsButton" }) do
+    optionButtons[#optionButtons + 1] = layout[key]
+  end
+  for _, button in ipairs(optionButtons) do
+    if button and button.SetSize then
+      button:SetSize(optionsButtonWidth, optionsButtonHeight)
+    end
+  end
+
+  -- Resize options scroll view.
+  local osv = layout.optionsScrollView
+  if osv then
+    -- Resize keeps the bar's share of the width, so the bar stays on the page.
+    local Metrics = ns.ScrollViewMetrics or require("Susurrus.UI.ScrollView.Metrics")
+    Metrics.Resize(osv, optionsContentWidth, optionsHeight)
+    Metrics.RefreshMetrics(osv, sizeValue(osv.content, "GetHeight", "height", layout.optionsContentHeight or 420))
+  end
+
+  return {
+    contactsWidth = contactsWidth,
+    expandedContactsWidth = layout.expandedContactsWidth,
+    contentWidth = contentWidth,
+    contactsHeight = contactsHeight,
+    contactsListHeight = contactsListHeight,
+    threadHeight = threadHeight,
+  }
+end
+
+ns.MessengerWindowLayoutApply = Apply
+
+return Apply

@@ -1,0 +1,89 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Constants = {
+  VERSION = "v2.1.1",
+
+  LIVE_EVENT_NAMES = {
+    "CHAT_MSG_WHISPER",
+    "CHAT_MSG_WHISPER_INFORM",
+    "CHAT_MSG_AFK",
+    "CHAT_MSG_DND",
+    "CAN_LOCAL_WHISPER_TARGET_RESPONSE",
+    "CHAT_MSG_BN_WHISPER",
+    "CHAT_MSG_BN_WHISPER_INFORM",
+    "CHAT_MSG_BN_WHISPER_PLAYER_OFFLINE",
+    "CHAT_MSG_ADDON",
+    "BN_CHAT_MSG_ADDON",
+    "CHAT_MSG_SYSTEM",
+  },
+
+  CHANNEL_EVENT_NAMES = {
+    "CHAT_MSG_CHANNEL",
+  },
+
+  GROUP_EVENT_NAMES = {
+    "CHAT_MSG_PARTY",
+    "CHAT_MSG_PARTY_LEADER",
+    "CHAT_MSG_INSTANCE_CHAT",
+    "CHAT_MSG_INSTANCE_CHAT_LEADER",
+    "CHAT_MSG_RAID",
+    "CHAT_MSG_RAID_LEADER",
+    "CHAT_MSG_RAID_WARNING",
+    "CHAT_MSG_GUILD",
+    "CHAT_MSG_OFFICER",
+    "CHAT_MSG_BN_CONVERSATION",
+    "CHAT_MSG_COMMUNITIES_CHANNEL",
+  },
+
+  LIFECYCLE_EVENT_NAMES = {
+    "BN_FRIEND_LIST_SIZE_CHANGED",
+    "BN_FRIEND_INFO_CHANGED",
+    "BN_FRIEND_ACCOUNT_ONLINE",
+    "BN_FRIEND_ACCOUNT_OFFLINE",
+    "FRIENDLIST_UPDATE",
+    "PLAYER_ENTERING_WORLD",
+    "PLAYER_LOGOUT",
+    "GUILD_ROSTER_UPDATE",
+    "CLUB_MEMBER_UPDATED",
+    "CLUB_MEMBER_ADDED",
+    "CLUB_MEMBER_REMOVED",
+    "GROUP_ROSTER_UPDATE",
+    "GROUP_FORMED",
+    "GROUP_JOINED",
+    "GROUP_LEFT",
+    "CHALLENGE_MODE_START",
+    "CHALLENGE_MODE_COMPLETED",
+    "CHALLENGE_MODE_RESET",
+    "ENCOUNTER_START",
+    "ENCOUNTER_END",
+    "PLAYER_REGEN_DISABLED",
+    "PLAYER_REGEN_ENABLED",
+    "ZONE_CHANGED_NEW_AREA",
+    "ADDON_RESTRICTION_STATE_CHANGED",
+    "UPDATE_BINDINGS",
+    "HOUSE_EDITOR_MODE_CHANGED",
+  },
+
+  -- Lifecycle events that must stay registered during mythic lockdown
+  -- (needed for detecting zone transitions and mythic end).
+  MYTHIC_ESSENTIAL_EVENTS = {
+    PLAYER_ENTERING_WORLD = true,
+    PLAYER_LOGOUT = true,
+    CHALLENGE_MODE_START = true,
+    CHALLENGE_MODE_COMPLETED = true,
+    CHALLENGE_MODE_RESET = true,
+    ENCOUNTER_START = true,
+    ENCOUNTER_END = true,
+    ZONE_CHANGED_NEW_AREA = true,
+    -- The authoritative 12.0 restriction signal: the Inactive transition is
+    -- what triggers resume, so it must keep flowing while suspended.
+    ADDON_RESTRICTION_STATE_CHANGED = true,
+  },
+}
+
+ns.Constants = Constants
+
+return Constants

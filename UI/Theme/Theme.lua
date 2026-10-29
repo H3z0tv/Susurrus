@@ -1,0 +1,162 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Colors = ns.ThemeColors or require("Susurrus.UI.Theme.Colors")
+local Fonts = ns.ThemeFonts or require("Susurrus.UI.Theme.Fonts")
+local Layout = ns.ThemeLayout or require("Susurrus.UI.Theme.Layout")
+local ThemeTextures = ns.ThemeTextures or require("Susurrus.UI.Theme.Textures")
+local ThemePresets = ns.ThemePresets or require("Susurrus.UI.Theme.Presets")
+
+local Theme = {}
+Theme.DEFAULT_PRESET = ThemePresets.WOW_DEFAULT or "wow_default"
+local activePresetKey = Theme.DEFAULT_PRESET
+local function isValidColorToken(token)
+  return type(token) == "table"
+    and type(token[1]) == "number"
+    and type(token[2]) == "number"
+    and type(token[3]) == "number"
+    and type(token[4]) == "number"
+end
+
+local function canApplyPreset(preset)
+  if type(preset) ~= "table" then
+    return false
+  end
+
+  for key, current in pairs(Theme.COLORS) do
+    if type(current) ~= "table" or not isValidColorToken(preset[key]) then
+      return false
+    end
+  end
+
+  return true
+end
+
+local function applyPresetColors(preset)
+  for key, current in pairs(Theme.COLORS) do
+    local token = preset[key]
+    current[1] = token[1]
+    current[2] = token[2]
+    current[3] = token[3]
+    current[4] = token[4]
+  end
+end
+
+-- Window title in both chromes (not localized: it is the addon name).
+Theme.MODERN_TITLE = "Susurrus Chat"
+-- Fixed gold accent shared by chat bubble sender tags and the header addon
+-- badge. Deliberately NOT a preset token — stays the same in every theme.
+Theme.TAG_GOLD = { 0.96, 0.78, 0.24, 1 }
+Theme.WINDOW_IDLE_ALPHA = 1
+Theme.WINDOW_EXTERNAL_ACTIVITY_ALPHA = 0.72
+Theme.WINDOW_ALPHA_UPDATE_INTERVAL = 0.1
+
+Theme.COLORS = Colors
+Theme.FONTS = Fonts
+Theme.LAYOUT = Layout
+Theme.TEXTURES = ThemeTextures.TEXTURES
+Theme.ClassIcon = ThemeTextures.ClassIcon
+Theme.FactionIcon = ThemeTextures.FactionIcon
+Theme.ChannelIcon = ThemeTextures.ChannelIcon
+
+local function grownFontPx()
+  return math.max(0, Fonts.GetFontSize() - Fonts.DEFAULT_BASE_SIZE)
+end
+
+-- Contact row height for the current font size. Never below the base row.
+function Theme.ContactRowHeight()
+  return Layout.CONTACT_ROW_HEIGHT + grownFontPx() * Layout.CONTACT_ROW_GROWTH_PER_FONT_PX
+end
+
+-- Filters page row height (rules, ignored players) for the current font size.
+function Theme.FilterRowHeight()
+  return Layout.FILTER_ROW_HEIGHT + grownFontPx() * Layout.FILTER_ROW_GROWTH_PER_FONT_PX
+end
+
+-- Conversation header height for the current font size. Never below the base.
+function Theme.HeaderHeight()
+  return Layout.HEADER_HEIGHT + grownFontPx() * Layout.HEADER_GROWTH_PER_FONT_PX
+end
+
+local BubbleColors = ns.ThemeBubbleColors
+if type(BubbleColors) ~= "table" and type(require) == "function" then
+  local ok, mod = pcall(require, "Susurrus.UI.Theme.BubbleColors")
+  if ok and type(mod) == "table" then
+    BubbleColors = mod
+  end
+end
+
+function Theme.ListPresets()
+  return ThemePresets.ListKeys()
+end
+
+function Theme.GetPreset()
+  return activePresetKey
+end
+
+-- Single source for every unread badge's colours (bg, text). Read at paint
+-- time so badges follow live preset switches.
+function Theme.BadgeColors()
+  return Theme.COLORS.unread_badge, Theme.COLORS.unread_badge_text
+end
+
+function Theme.SetPreset(presetKey)
+  local preset = ThemePresets.Get(presetKey)
+  if not canApplyPreset(preset) then
+    return false
+  end
+
+  applyPresetColors(preset)
+  activePresetKey = presetKey
+
+  -- Re-apply custom bubble colors if a non-default bubble preset is active
+  if BubbleColors and BubbleColors.ApplyPreset then
+    BubbleColors.ApplyPreset()
+  end
+
+  return true
+end
+
+function Theme.ResolvePreset(requestedKey)
+  local fallbackKey = Theme.DEFAULT_PRESET
+  local targetKey = requestedKey or fallbackKey
+
+  if Theme.SetPreset(targetKey) then
+    return targetKey, true
+  end
+
+  if targetKey ~= fallbackKey and Theme.SetPreset(fallbackKey) then
+    return fallbackKey, true
+  end
+
+  local activeKey = Theme.GetPreset() or fallbackKey
+  return activeKey, false
+end
+
+function Theme.ListBubblePresets()
+  if BubbleColors and BubbleColors.ListPresets then
+    return BubbleColors.ListPresets()
+  end
+  return { "default" }
+end
+
+function Theme.SetBubblePreset(presetKey)
+  if BubbleColors and BubbleColors.SetPreset then
+    return BubbleColors.SetPreset(presetKey)
+  end
+  return false
+end
+
+-- Backward-compatible flat aliases
+Theme.WINDOW_WIDTH = Layout.WINDOW_WIDTH
+Theme.WINDOW_HEIGHT = Layout.WINDOW_HEIGHT
+Theme.CONTACTS_WIDTH = Layout.CONTACTS_WIDTH
+Theme.TOP_BAR_HEIGHT = Layout.TOP_BAR_HEIGHT
+Theme.CONTENT_PADDING = Layout.CONTENT_PADDING
+Theme.COMPOSER_HEIGHT = Layout.COMPOSER_HEIGHT
+Theme.DIVIDER_THICKNESS = Layout.DIVIDER_THICKNESS
+
+ns.Theme = Theme
+return Theme

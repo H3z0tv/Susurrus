@@ -1,0 +1,68 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Builder = ns.ThemePresetsBuilder or require("Susurrus.UI.Theme.Presets.Builder")
+local rgb = Builder.Rgb
+local withAlpha = Builder.WithAlpha
+local makeDividerRoles = Builder.MakeDividerRoles
+
+local textSecondaryRgb = rgb(1.0, 1.0, 1.0)
+-- Blizzard NORMAL_FONT_COLOR gold drives selection, badges and the widget.
+local accentRgb = rgb(1.00, 0.82, 0.00)
+
+local roles = {
+  surface_primary = { 0.06, 0.06, 0.07, 0.97 },
+  surface_secondary = { 0.10, 0.09, 0.08, 0.60 },
+  surface_chrome = { 0.09, 0.08, 0.07, 0.60 },
+  contact_hover = { 1.0, 1.0, 1.0, 0.05 },
+  contact_selected = withAlpha(accentRgb, 0.16),
+  contact_selected_hover = withAlpha(accentRgb, 0.22),
+  -- Pinned reads through ordering and the hover pin, not a colour.
+  contact_pinned = withAlpha(accentRgb, 0.05),
+  bubble_in = { 0.18, 0.20, 0.26, 0.95 },
+  -- Outgoing bubble: dark bronze under the gold sent text.
+  bubble_out = { 0.24, 0.19, 0.09, 0.92 },
+  bubble_system = { 0.14, 0.12, 0.08, 0.65 },
+  -- Warm-bronze field a step lighter than the chrome surfaces.
+  input_bg = { 0.16, 0.14, 0.10, 1.0 },
+  text_primary = { 1.00, 1.00, 1.00, 1.0 },
+  text_soft = { 0.90, 0.90, 0.90, 1.0 },
+  text_secondary = withAlpha(textSecondaryRgb, 0.55),
+  text_emphasis = withAlpha(accentRgb, 1.0),
+  -- Sent bubbles and selected buttons: gold on those fills is hard to read.
+  text_bright = { 1.00, 1.00, 1.00, 1.0 },
+  text_system = { 1.00, 1.00, 0.00, 1.0 },
+  text_timestamp = { 1.0, 1.0, 1.0, 0.40 },
+  accent = withAlpha(accentRgb, 1.0),
+  toggle_on = withAlpha(accentRgb, 1.0),
+  button_fill_hover = { 0.42, 0.32, 0.08, 1.0 },
+  status_online = { 0.10, 1.00, 0.10, 1.0 },
+  status_offline = { 0.50, 0.50, 0.50, 1.0 },
+  status_away = { 1.00, 0.50, 0.25, 1.0 },
+  status_dnd = { 1.00, 0.10, 0.10, 1.0 },
+  scrollbar = { 1.0, 1.0, 1.0, 0.14 },
+  scrollbar_hover = { 1.0, 1.0, 1.0, 0.32 },
+  option_bg = { 0.10, 0.10, 0.11, 0.90 },
+  toggle_off = { 0.25, 0.25, 0.28, 0.95 },
+  composer_pane_border = { 1.0, 1.0, 1.0, 0.08 },
+  window_border = { 1.0, 1.0, 1.0, 0.10 },
+  danger_bg = { 0.45, 0.12, 0.12, 0.80 },
+  danger_hover = { 0.55, 0.16, 0.16, 0.90 },
+  action_icon = withAlpha(textSecondaryRgb, 0.45),
+  toggle_icon_bg = withAlpha(accentRgb, 1.0),
+  toggle_icon_ring = withAlpha(accentRgb, 0.75),
+  toggle_icon_glyph = { 1.00, 1.00, 1.00, 1.0 },
+}
+
+-- White-plus-alpha hairlines read as neutral on any surface tone.
+local dividers = makeDividerRoles(rgb(1.0, 1.0, 1.0), 0.08, 0.10, rgb(1.0, 1.0, 1.0), 0.16)
+for k, v in pairs(dividers) do
+  roles[k] = v
+end
+
+local data = { key = "wow_native", roles = roles }
+
+ns.ThemePresetDataWowNative = data
+return data

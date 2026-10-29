@@ -1,0 +1,162 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ContactsList = ns.ContactsList or require("Susurrus.UI.ContactsList")
+local ScrollView = ns.ScrollView or require("Susurrus.UI.ScrollView")
+local Navigation = ns.ScrollViewNavigation or require("Susurrus.UI.ScrollView.Navigation")
+local DragController = ns.MessengerWindowDragController or require("Susurrus.UI.MessengerWindow.DragController")
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
+local sizeValue = UIHelpers.sizeValue
+
+local ContactsController = {}
+
+-- Creates contact management state and wires infinite-scroll hooks.
+--
+-- factory       : frame factory
+-- contactsView  : ScrollView created for the contacts pane
+-- initialContacts : initial list of contacts (table)
+-- options       : { onSelect, initialSelectedKey }
+--
+-- Returns:
+--   { rows, refresh, loadMore, content, scrollFrame, scrollBar, view }
+function ContactsController.Create(factory, contactsView, initialContacts, options)
+  options = options or {}
+
+  local currentContacts = initialContacts or {}
+  local currentSelectedKey = options.initialSelectedKey
+  local viewportH = contactsView.viewportHeight or 0
+  -- Base height: rows only grow with the font, so this never undercounts.
+  local rowH = Theme.LAYOUT.CONTACT_ROW_HEIGHT
+  local visibleCount = math.max(10, math.ceil(viewportH / rowH) + 1)
+
+  local controller = {
+    rows = {},
+    content = contactsView.content,
+    scrollFrame = contactsView.scrollFrame,
+    scrollBar = contactsView.scrollBar,
+    view = contactsView,
+  }
+
+  local dragHandlers = DragController.Create(factory, controller, function()
+    return currentContacts
+  end, {
+    onReorder = options.onReorder,
+  })
+  -- Built once and mutated in place. refresh() runs on every background status
+  -- tick, and a fresh table plus five wrapper closures per call was pure churn.
+  local rowOptions = {
+    onSelect = function(item)
+      if options.onSelect then
+        options.onSelect(item)
+      end
+    end,
+    onPin = function(item)
+      if options.onPin then
+        options.onPin(item)
+      end
+    end,
+    onRemove = function(item)
+      if options.onRemove then
+        options.onRemove(item)
+      end
+    end,
+    onMarkUnread = function(item)
+      if options.onMarkUnread then
+        options.onMarkUnread(item)
+      end
+    end,
+    onUpdatePrefs = function(item, changes)
+      if options.onUpdatePrefs then
+        options.onUpdatePrefs(item, changes)
+      end
+    end,
+    onIgnorePlayer = options.onIgnorePlayer,
+    onUnblockPlayer = options.onUnblockPlayer,
+    isPlayerBlocked = options.isPlayerBlocked,
+    whoPlayer = options.whoPlayer,
+    onDragStart = dragHandlers.handleDragStart,
+    onDragStop = dragHandlers.handleDragStop,
+  }
+
+  local function refresh(nextContacts, selectedKey, resetPaging)
+    if nextContacts ~= nil then
+      currentContacts = nextContacts
+    end
+    if selectedKey ~= nil then
+      currentSelectedKey = selectedKey
+    end
+    if resetPaging then
+      -- Drop prior loadMore() expansions but keep the viewport-based floor
+      -- so tall windows still paint a full first page instead of 10 rows.
+      local liveViewportH = contactsView.viewportHeight or viewportH
+      visibleCount = math.max(10, math.ceil(liveViewportH / rowH) + 1)
+      ScrollView.SetVerticalScroll(contactsView, 0)
+    end
+
+    rowOptions.selectedConversationKey = currentSelectedKey
+    rowOptions.visibleCount = visibleCount
+    rowOptions.hideMessagePreview = type(options.getHideMessagePreview) == "function" and options.getHideMessagePreview()
+      or options.hideMessagePreview
+    rowOptions.compact = type(options.getCompact) == "function" and options.getCompact() == true
+
+    local boundWidth = sizeValue(controller.content, "GetWidth", "width", 0)
+    controller.rows = ContactsList.Refresh(factory, controller.content, controller.rows, currentContacts, rowOptions)
+    -- One wheel notch = one row; Sync pushes the step to the scroll bar.
+    contactsView.step = Theme.ContactRowHeight()
+    ScrollView.Sync(contactsView)
+    -- Gaining or losing overflow resizes the content around the scrollbar;
+    -- rebind so the rows end beside the bar instead of under it.
+    if sizeValue(controller.content, "GetWidth", "width", 0) ~= boundWidth then
+      controller.rows = ContactsList.Refresh(factory, controller.content, controller.rows, currentContacts, rowOptions)
+    end
+
+    return controller.rows
+  end
+
+  local function loadMore()
+    if not ContactsList.HasMore(controller.content) then
+      return
+    end
+    visibleCount = visibleCount + 10
+    -- selectedKey is managed by the facade; pass nil to keep current selection
+    refresh(nil, nil)
+  end
+
+  local function fillViewport(newHeight)
+    local needed = math.ceil(newHeight / rowH) + 1
+    if needed > visibleCount then
+      visibleCount = needed
+      refresh(nil, nil)
+    end
+  end
+
+  controller.refresh = refresh
+  controller.loadMore = loadMore
+  controller.fillViewport = fillViewport
+
+  -- Infinite scroll: load more contacts when scrolling near the bottom.
+  -- Require offset > 0 so the trigger only fires in response to an actual
+  -- user scroll. Without this guard, initial Sync calls (which invoke
+  -- SetValue(0) on the scrollBar to mirror the current offset) satisfy the
+  -- `offset >= range - ROW_HEIGHT` check whenever range is less than one
+  -- row height (the +1 visible-row safety margin produces exactly that),
+  -- pumping visibleCount all the way up to #contacts before any user input.
+  local function checkLoadMore()
+    local range = ScrollView.GetRange(contactsView)
+    local offset = ScrollView.GetOffset(contactsView)
+    if range > 0 and offset > 0 and offset >= range - Theme.ContactRowHeight() then
+      loadMore()
+    end
+  end
+
+  Navigation.InstallPostScrollHook(contactsView, checkLoadMore)
+
+  return controller
+end
+
+ns.MessengerWindowContactsController = ContactsController
+
+return ContactsController

@@ -1,0 +1,42 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local TextInputDialog = ns.TextInputDialog or require("Susurrus.UI.Shared.TextInputDialog")
+local Localization = ns.Localization or require("Susurrus.Locale.Localization")
+local ContactPrefs = ns.ContactPrefs or require("Susurrus.Model.ContactPrefs")
+local TextLimits = ns.TextLimits or require("Susurrus.Util.TextLimits")
+local DisplayName = ns.DisplayName or require("Susurrus.Util.DisplayName")
+
+-- Text-entry popups for a contact's nickname and note. The typed text goes
+-- to onSave untouched (ContactPrefs trims, caps and clears).
+local ContactPrefsDialog = {}
+
+local NICKNAME_DIALOG = "SUSURRUS_SET_NICKNAME"
+local NOTE_DIALOG = "SUSURRUS_EDIT_NOTE"
+
+local function show(dialogName, limits, promptKey, item, currentValue, onSave)
+  return TextInputDialog.Show(dialogName, {
+    prompt = Localization.Text(promptKey),
+    accept = Localization.Text("Save"),
+    maxLetters = limits.maxLetters,
+    maxBytes = limits.maxBytes,
+    textArg = DisplayName.Format(item.displayName or item.battleTag) or "",
+    value = currentValue or "",
+    onAccept = onSave,
+  })
+end
+
+function ContactPrefsDialog.ShowNickname(item, onSave)
+  local limits = { maxLetters = ContactPrefs.MAX_NICKNAME_CHARS }
+  return show(NICKNAME_DIALOG, limits, "Set a nickname for %s. Leave empty to remove it.", item, item.nickname, onSave)
+end
+
+function ContactPrefsDialog.ShowNote(item, onSave)
+  local limits = { maxBytes = TextLimits.INPUT_MAX_BYTES }
+  return show(NOTE_DIALOG, limits, "Note for %s. Leave empty to remove it.", item, item.note, onSave)
+end
+
+ns.ContactsListContactPrefsDialog = ContactPrefsDialog
+return ContactPrefsDialog

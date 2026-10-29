@@ -1,0 +1,87 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
+
+local PickerStyles = {}
+
+-- Textures showing Blizzard art (NativeArt.Set) keep it.
+function PickerStyles.ApplyColor(texture, color)
+  if texture and not texture._wmNativeArt and type(texture.SetColorTexture) == "function" then
+    texture:SetColorTexture(color[1], color[2], color[3], color[4] or 1)
+  end
+end
+
+-- Grey of secondary tooltip lines (hints, keybindings).
+PickerStyles.HINT_GREY = 0.6
+local HINT_GREY = PickerStyles.HINT_GREY
+-- Emphasis passed to HighlightColor for popup hovers and marks.
+PickerStyles.HOVER_ALPHA = 0.35
+-- One row of a popup list or settings list (quick replies, delivery actions,
+-- the reaction picker's bottom row).
+PickerStyles.ROW_HEIGHT = 24
+
+-- hint: optional second line, grey.
+function PickerStyles.ShowTooltipText(owner, text, hint)
+  local tooltip = _G.GameTooltip
+  if type(tooltip) ~= "table" then
+    return
+  end
+  if type(tooltip.SetOwner) == "function" then
+    tooltip:SetOwner(owner, "ANCHOR_TOP")
+  end
+  if type(tooltip.SetText) == "function" then
+    tooltip:SetText(text)
+  end
+  if hint and type(tooltip.AddLine) == "function" then
+    tooltip:AddLine(hint, HINT_GREY, HINT_GREY, HINT_GREY)
+  end
+  if type(tooltip.Show) == "function" then
+    tooltip:Show()
+  end
+end
+
+function PickerStyles.ShowTooltip(owner, key)
+  PickerStyles.ShowTooltipText(owner, ":" .. key .. ":")
+end
+
+function PickerStyles.HideTooltip()
+  local tooltip = _G.GameTooltip
+  if type(tooltip) == "table" and type(tooltip.Hide) == "function" then
+    tooltip:Hide()
+  end
+end
+
+function PickerStyles.BackgroundColor()
+  local color = Theme.COLORS.bg_header or Theme.COLORS.bg_composer or { 0.05, 0.06, 0.08, 1 }
+  return { color[1], color[2], color[3], 0.96 }
+end
+
+function PickerStyles.BorderColor()
+  local color = Theme.COLORS.contacts_border_right or Theme.COLORS.divider or { 0.2, 0.2, 0.2, 1 }
+  return { color[1], color[2], color[3], color[4] or 1 }
+end
+
+function PickerStyles.HighlightColor(alpha)
+  local color = Theme.COLORS.option_button_hover or Theme.COLORS.bg_contact_hover or { 0.2, 0.5, 0.8, 1 }
+  local tokenAlpha = color[4] or 1
+  if alpha ~= nil then
+    -- Hovers are white-plus-alpha: a fixed alpha would paint a white box,
+    -- so emphasise with the token's own alpha doubled instead.
+    return { color[1], color[2], color[3], math.min(1, tokenAlpha * 2) }
+  end
+  return { color[1], color[2], color[3], tokenAlpha }
+end
+
+function PickerStyles.ApplyPanelTheme(frame, border)
+  PickerStyles.ApplyColor(frame._background, PickerStyles.BackgroundColor())
+  if border and type(UIHelpers.applyBorderBoxColor) == "function" then
+    UIHelpers.applyBorderBoxColor(border, PickerStyles.BorderColor())
+  end
+end
+
+ns.PickerStyles = PickerStyles
+return PickerStyles

@@ -1,0 +1,88 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ChannelType = ns.ChannelType or require("Susurrus.Model.Identity.ChannelType")
+
+local BadgeFilter = {}
+
+-- Only the explicitly-known Stage-4 group-ingest channel values are treated as
+-- group channels for badge-exclusion purposes. Legacy channel strings such as
+-- "WOW" and "BN" (written by the pre-Stage-1 whisper pipeline) are treated as
+-- whispers so they continue to count toward the badge.
+local function isGroupChannel(channel)
+  return ChannelType.GROUP_CHANNELS[channel] == true
+end
+
+-- IsGroupChannel returns true only for explicitly-known group channels.
+-- Nil, "WOW", "BN", WHISPER, BN_WHISPER all return false so whisper-only
+-- surfaces (minimap badge, widget preview popup) continue to work.
+function BadgeFilter.IsGroupChannel(channel)
+  return isGroupChannel(channel)
+end
+
+-- Muted conversations and message requests keep their own row count but
+-- never feed an aggregate badge. A mention breaks through mute.
+local function badgeUnread(contact)
+  if contact.isRequest == true or (contact.muted == true and contact.hasUnreadMention ~= true) then
+    return 0
+  end
+  return tonumber(contact.unreadCount) or 0
+end
+
+-- The unread count a contact adds to badges and "jump to unread".
+BadgeFilter.BadgeUnread = badgeUnread
+
+-- SumWhisperUnread returns the aggregate unread count across all contacts
+-- that are NOT group conversations. Group conversations are intentionally
+-- excluded from the minimap/widget badge per user requirement.
+-- Nil, unknown, or legacy channel values ("WOW", "BN") are treated as
+-- whispers and DO count toward the badge total.
+function BadgeFilter.SumWhisperUnread(contacts)
+  local total = 0
+  for _, contact in ipairs(contacts or {}) do
+    if not isGroupChannel(contact.channel) then
+      total = total + badgeUnread(contact)
+    end
+  end
+  return total
+end
+
+-- SumGroupUnread returns the aggregate unread count across all group
+-- conversations only. Used for the Groups tab label counter; channel chats
+-- in the Channels tab count there instead.
+function BadgeFilter.SumGroupUnread(contacts)
+  local total = 0
+  for _, contact in ipairs(contacts or {}) do
+    if isGroupChannel(contact.channel) and contact.inChannelsTab ~= true then
+      total = total + badgeUnread(contact)
+    end
+  end
+  return total
+end
+
+-- SumChannelUnread feeds the Channels tab counter.
+function BadgeFilter.SumChannelUnread(contacts)
+  local total = 0
+  for _, contact in ipairs(contacts or {}) do
+    if contact.inChannelsTab == true then
+      total = total + badgeUnread(contact)
+    end
+  end
+  return total
+end
+
+-- SumRequestUnread feeds only the (dim) Requests tab counter.
+function BadgeFilter.SumRequestUnread(contacts)
+  local total = 0
+  for _, contact in ipairs(contacts or {}) do
+    if contact.isRequest == true then
+      total = total + (tonumber(contact.unreadCount) or 0)
+    end
+  end
+  return total
+end
+
+ns.ToggleIconBadgeFilter = BadgeFilter
+return BadgeFilter

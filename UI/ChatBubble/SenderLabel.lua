@@ -1,0 +1,163 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
+local Localization = ns.Localization or require("Susurrus.Locale.Localization")
+local DeliveryStatus = ns.ChatBubbleDeliveryStatus or require("Susurrus.UI.ChatBubble.DeliveryStatus")
+local DisplayName = ns.DisplayName or require("Susurrus.Util.DisplayName")
+local LevelColor = ns.LevelColor or require("Susurrus.UI.LevelColor")
+local PlayerMenuClick = ns.ChatBubblePlayerMenuClick or require("Susurrus.UI.ChatBubble.PlayerMenuClick")
+local setFontObject = UIHelpers.setFontObject
+local setTextColor = UIHelpers.setTextColor
+
+local SenderLabel = {}
+
+-- Pooled frames are reused across renders. Creating a fresh FontString every
+-- render parents it to the recycled frame; WoW can't GC frame regions, so
+-- they pile up indefinitely. Cache each FontString on the frame the first
+-- time and reuse on subsequent renders.
+local function ensureFontString(frame, cacheKey)
+  local fs = frame[cacheKey]
+  if not fs then
+    fs = frame:CreateFontString(nil, "OVERLAY")
+    frame[cacheKey] = fs
+  end
+  fs:ClearAllPoints()
+  if fs.Show then
+    fs:Show()
+  end
+  return fs
+end
+
+local function hideCached(frame, cacheKey)
+  local fs = frame[cacheKey]
+  if fs and fs.Hide then
+    fs:Hide()
+  end
+end
+
+-- The label's time: a collapsed repeat shows when it was last seen.
+function SenderLabel.ShownTimestamp(message)
+  if (tonumber(message.repeatCount) or 1) > 1 and message.lastSeenAt ~= nil then
+    return message.lastSeenAt
+  end
+  return message.sentAt
+end
+
+function SenderLabel.CreateSenderLabel(factory, contentFrame, message, paneWidth, yOffset, options)
+  options = options or {}
+  local frame = factory.CreateFrame("Frame", nil, contentFrame)
+  frame:SetSize(paneWidth, 16)
+  frame:ClearAllPoints()
+
+  local nameFS = ensureFontString(frame, "_wmSenderNameFS")
+  setFontObject(nameFS, Theme.FONTS.message_time)
+  setTextColor(nameFS, Theme.COLORS.text_secondary)
+
+  -- A collapsed repeat shows when it was last seen and how often ("×3").
+  local repeatCount = tonumber(message.repeatCount) or 1
+  local timeStr = ""
+  if ns.TimeFormat and ns.TimeFormat.MessageTime then
+    timeStr = ns.TimeFormat.MessageTime(SenderLabel.ShownTimestamp(message)) or ""
+  end
+  if repeatCount > 1 then
+    timeStr = timeStr .. " " .. UIHelpers.colorEscape(Theme.COLORS.accent) .. "×" .. repeatCount .. "|r"
+  end
+  local timeFS = ensureFontString(frame, "_wmSenderTimeFS")
+  setFontObject(timeFS, Theme.FONTS.message_time)
+  setTextColor(timeFS, Theme.COLORS.text_timestamp)
+  timeFS:SetText(timeStr)
+
+  if message.direction == "out" then
+    nameFS:SetText(Localization.Text("You"))
+
+    -- Cross-character outgoing: append a gold "· <CharName>" suffix that
+    -- mirrors the incoming "· via <Channel>" tag. Resolved at render time
+    -- against the current player, so same-character messages stay plain.
+    local attachedCharname = false
+    if type(message.senderName) == "string" and message.senderName ~= "" then
+      local currentPlayerName
+      if type(_G.UnitName) == "function" then
+        local ok, name = pcall(_G.UnitName, "player")
+        if ok and type(name) == "string" and name ~= "" then
+          currentPlayerName = name
+        end
+      end
+      if currentPlayerName and currentPlayerName ~= message.senderName then
+        local charnameFS = ensureFontString(frame, "_wmSenderCharnameFS")
+        setFontObject(charnameFS, Theme.FONTS.message_time)
+        setTextColor(charnameFS, Theme.TAG_GOLD) -- match channel tag gold
+        charnameFS:SetText("- " .. message.senderName)
+        charnameFS:SetPoint("RIGHT", frame, "RIGHT", -Theme.LAYOUT.MESSAGE_EDGE_INSET, 0)
+        nameFS:SetPoint("RIGHT", charnameFS, "LEFT", -4, 0)
+        attachedCharname = true
+      end
+    end
+    if not attachedCharname then
+      hideCached(frame, "_wmSenderCharnameFS")
+      nameFS:SetPoint("RIGHT", frame, "RIGHT", -Theme.LAYOUT.MESSAGE_EDGE_INSET, 0)
+    end
+    -- Outgoing labels never show the channel tag; hide it if this pooled
+    -- frame previously rendered an incoming message with a channel.
+    hideCached(frame, "_wmSenderTagFS")
+    timeFS:SetPoint("RIGHT", nameFS, "LEFT", -Theme.LAYOUT.MESSAGE_TIMESTAMP_GAP, 0)
+    -- "(Not sent)" / "(Queued)", or else the "Seen" receipt from a peer
+    -- running the addon, left of the timestamp.
+    local hasStatus = DeliveryStatus.ApplyHeader(frame, message, timeFS, options)
+    if options.showSeen and not hasStatus then
+      local seenFS = ensureFontString(frame, "_wmSenderSeenFS")
+      setFontObject(seenFS, Theme.FONTS.message_time)
+      setTextColor(seenFS, Theme.COLORS.online or Theme.COLORS.text_secondary)
+      seenFS:SetText(Localization.Text("Seen"))
+      seenFS:SetPoint("RIGHT", timeFS, "LEFT", -Theme.LAYOUT.MESSAGE_TIMESTAMP_GAP, 0)
+    else
+      hideCached(frame, "_wmSenderSeenFS")
+    end
+    frame:SetPoint("TOPRIGHT", contentFrame, "TOPRIGHT", 0, -yOffset)
+  else
+    hideCached(frame, "_wmSenderSeenFS")
+    DeliveryStatus.Hide(frame)
+    local displayName = DisplayName.Format(message.playerName or message.senderDisplayName) or ""
+    -- "Name (20)": only "(20)" takes the difficulty colour.
+    local level = message.senderLevel
+    if DisplayName.ShowPlayerLevels() and type(level) == "number" and displayName ~= "" then
+      nameFS:SetText(displayName .. " " .. LevelColor.Escape(level) .. "(" .. level .. ")|r")
+    else
+      nameFS:SetText(displayName)
+    end
+    UIHelpers.applyClassColor(nameFS, message.classTag or options.senderFallbackClassTag, Theme.COLORS.text_secondary)
+    nameFS:SetPoint("LEFT", frame, "LEFT", Theme.LAYOUT.MESSAGE_EDGE_INSET, 0)
+
+    -- Incoming labels never show the cross-char suffix; hide it if this
+    -- pooled frame previously rendered an outgoing cross-char message.
+    hideCached(frame, "_wmSenderCharnameFS")
+
+    -- Channel tag as a separate colored FontString (e.g. "· via Trade")
+    local channelAnchor = nameFS
+    if message.channelLabel and message.channelLabel ~= "" then
+      local tagFS = ensureFontString(frame, "_wmSenderTagFS")
+      setFontObject(tagFS, Theme.FONTS.message_time)
+      setTextColor(tagFS, Theme.TAG_GOLD)
+      tagFS:SetText("- " .. Localization.Text("via ") .. Localization.Text(message.channelLabel))
+      tagFS:SetPoint("LEFT", nameFS, "RIGHT", 4, 0)
+      channelAnchor = tagFS
+    else
+      hideCached(frame, "_wmSenderTagFS")
+    end
+
+    timeFS:SetPoint("LEFT", channelAnchor, "RIGHT", Theme.LAYOUT.MESSAGE_TIMESTAMP_GAP, 0)
+    frame:SetPoint("TOPLEFT", contentFrame, "TOPLEFT", 0, -yOffset)
+  end
+
+  if message.direction == "in" then
+    PlayerMenuClick.Attach(frame, message, options.openPlayerMenu)
+  end
+
+  return { frame = frame, height = 18 }
+end
+
+ns.ChatBubbleSenderLabel = SenderLabel
+return SenderLabel

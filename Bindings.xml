@@ -1,0 +1,5 @@
+<Bindings>
+  <Binding name="SUSURRUS_TOGGLE" category="Susurrus" default="CTRL-O">
+    Susurrus_Toggle()
+  </Binding>
+</Bindings>

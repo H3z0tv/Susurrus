@@ -1,0 +1,193 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local EventRouter = ns.EventRouter or require("Susurrus.Core.EventRouter")
+local AlertPolicy = ns.AlertPolicy or require("Susurrus.Model.AlertPolicy")
+local LivePresence = ns.LivePresence or require("Susurrus.Model.LivePresence")
+local AddonComm = ns.AddonComm or require("Susurrus.Transport.AddonComm")
+local PendingOutgoing = ns.EventRouterPendingOutgoing or require("Susurrus.Core.EventRouter.PendingOutgoing")
+
+
+-- stylua: ignore start
+local Registration = ns.BootstrapEventBridgeRegistration or require("Susurrus.Core.Bootstrap.EventBridge.Registration")
+local LivePayload = ns.BootstrapEventBridgeLivePayload or require("Susurrus.Core.Bootstrap.EventBridge.LivePayload")
+local GroupRouter = ns.BootstrapEventBridgeGroupRouter or require("Susurrus.Core.Bootstrap.EventBridge.GroupRouter")
+local ChannelRouter = ns.BootstrapEventBridgeChannelRouter or require("Susurrus.Core.Bootstrap.EventBridge.ChannelRouter")
+local IncomingAlerts = ns.BootstrapEventBridgeIncomingAlerts or require("Susurrus.Core.Bootstrap.EventBridge.IncomingAlerts")
+-- stylua: ignore end
+
+local EventBridge = {}
+
+-- Delegate registration functions to the Registration submodule.
+EventBridge.RegisterLiveEvents = Registration.RegisterLiveEvents
+EventBridge.UnregisterLiveEvents = Registration.UnregisterLiveEvents
+EventBridge.RegisterChannelEvents = Registration.RegisterChannelEvents
+EventBridge.RegisterGroupEvents = Registration.RegisterGroupEvents
+EventBridge.RegisterSuspendableLifecycleEvents = Registration.RegisterSuspendableLifecycleEvents
+EventBridge.UnregisterSuspendableLifecycleEvents = Registration.UnregisterSuspendableLifecycleEvents
+
+EventBridge.RouteChannelEvent = ChannelRouter.RouteChannelEvent
+
+local INCOMING_WHISPER_EVENTS = {
+  CHAT_MSG_WHISPER = true,
+  CHAT_MSG_BN_WHISPER = true,
+}
+
+local OUTGOING_WHISPER_EVENTS = {
+  CHAT_MSG_WHISPER_INFORM = true,
+  CHAT_MSG_BN_WHISPER_INFORM = true,
+}
+
+-- A typing indicator expires on its own; nothing else would redraw the
+-- window at that moment, so schedule one refresh just past the TTL. At most
+-- one pending timer is kept per conversation: while the peer keeps typing
+-- (extending the TTL on every packet), the timer just re-arms for the new
+-- remaining time instead of stacking a fresh timer per packet.
+local TYPING_EXPIRY_GRACE = 0.2
+local function scheduleTypingExpiry(runtime, refreshWindow, conversationKey)
+  local timer = _G.C_Timer
+  if timer == nil or type(timer.After) ~= "function" then
+    return
+  end
+  runtime.typingExpiryPending = runtime.typingExpiryPending or {}
+  if runtime.typingExpiryPending[conversationKey] then
+    return
+  end
+  local function fire()
+    local now = runtime.now and runtime.now() or 0
+    local remaining = LivePresence.TypingRemaining(runtime, conversationKey, now)
+    if remaining > 0 then
+      timer.After(remaining + TYPING_EXPIRY_GRACE, fire)
+    else
+      runtime.typingExpiryPending[conversationKey] = nil
+      if runtime.typingByConversation and runtime.typingByConversation[conversationKey] ~= nil then
+        runtime.typingByConversation[conversationKey] = nil
+        refreshWindow(conversationKey)
+      end
+    end
+  end
+  runtime.typingExpiryPending[conversationKey] = true
+  timer.After(LivePresence.TYPING_TTL + TYPING_EXPIRY_GRACE, fire)
+end
+
+local function applyIncomingEffects(runtime, result)
+  -- Muted conversations still store the whisper and count it unread; they
+  -- just never make noise or open the window.
+  local settings = runtime.accountState and runtime.accountState.settings
+  local now = type(runtime.now) == "function" and runtime.now() or nil
+  local shouldAlert = AlertPolicy.ShouldAlert(result, settings)
+    and not IncomingAlerts.Throttled(runtime, type(result) == "table" and result.conversationKey or nil, now)
+  if shouldAlert then
+    IncomingAlerts.Notify(settings)
+  end
+  if result and result.conversationKey then
+    runtime.lastIncomingWhisperKey = result.conversationKey
+    runtime.lastIncomingWhisperAt = now
+    -- Reading group or channel chat: a whisper must not take over the pane.
+    local tabMode = runtime.window and type(runtime.window.getTabMode) == "function" and runtime.window.getTabMode()
+    local inGroupsTab = tabMode == "groups" or tabMode == "channels"
+    if
+      shouldAlert
+      and settings
+      and settings.autoOpenIncoming ~= false
+      and runtime.onAutoOpen
+      and type(_G.InCombatLockdown) == "function"
+      and not _G.InCombatLockdown()
+      and not inGroupsTab
+    then
+      runtime.onAutoOpen(result.conversationKey)
+    end
+  end
+end
+
+function EventBridge.RouteLiveEvent(runtime, refreshWindow, eventName, ...)
+  if runtime == nil then
+    return nil
+  end
+  if eventName == "CHAT_MSG_ADDON" or eventName == "BN_CHAT_MSG_ADDON" then
+    local prefix = ...
+    if prefix ~= AddonComm.PREFIX_REACTION and prefix ~= AddonComm.PREFIX_QUEST_LINK then
+      return nil
+    end
+  end
+  -- System lines only matter while a whisper awaits its echo.
+  if eventName == "CHAT_MSG_SYSTEM" then
+    PendingOutgoing.PruneExpired(runtime, type(runtime.now) == "function" and runtime.now() or nil)
+    if next(runtime.pendingOutgoing or {}) == nil then
+      return nil
+    end
+  end
+  local payload = LivePayload.Build(runtime, eventName, ...)
+  runtime.onReactionFallbackDegraded = function(degradedConversation)
+    if degradedConversation == nil then
+      return
+    end
+    applyIncomingEffects(runtime, degradedConversation)
+    if refreshWindow and degradedConversation.conversationKey then
+      refreshWindow(degradedConversation.conversationKey)
+    end
+  end
+
+  local result, resultMeta = EventRouter.HandleEvent(runtime, eventName, payload)
+  local convertedReactionControl = resultMeta and resultMeta.reactionControl == true
+  local changedSetReaction = type(resultMeta) == "table" and resultMeta.reactionChanged == true and resultMeta.reactionOperation == "set"
+  local shouldApplyIncomingEffects = result
+    and ((INCOMING_WHISPER_EVENTS[eventName] and not convertedReactionControl) or (convertedReactionControl and changedSetReaction))
+  if shouldApplyIncomingEffects then
+    applyIncomingEffects(runtime, result)
+  end
+  if OUTGOING_WHISPER_EVENTS[eventName] and result and result.conversationKey then
+    -- Unlike incoming whispers (which stay quiet to avoid yanking the user off
+    -- a group selection they chose), outgoing whispers fire the auto-open path
+    -- even when Groups is active — the user initiated the whisper and expects
+    -- to see the conversation they just started. The openAndSelect handler
+    -- then force-switches to the Whispers tab.
+    if
+      runtime.accountState
+      and runtime.accountState.settings
+      and runtime.accountState.settings.autoOpenOutgoing ~= false
+      and runtime.onAutoOpenOutgoing
+      and type(_G.InCombatLockdown) == "function"
+      and not _G.InCombatLockdown()
+      and not (resultMeta and resultMeta.outgoingFromPendingSend == true)
+    then
+      runtime.onAutoOpenOutgoing(result.conversationKey)
+    end
+  end
+  if refreshWindow and result and result.conversationKey then
+    local typingMeta = type(resultMeta) == "table" and resultMeta.presence == "typing" and resultMeta or nil
+    if not (typingMeta and typingMeta.typingChanged == false) then
+      refreshWindow(result.conversationKey)
+    end
+    if typingMeta and typingMeta.typingActive == true then
+      scheduleTypingExpiry(runtime, refreshWindow, result.conversationKey)
+    end
+  end
+  return result
+end
+
+-- A whisper held during a chat lock, re-read after the lock lifted. It is
+-- filed at the time it arrived and stays quiet: no sound, flash or auto-open,
+-- no reply-key change and no per-message refresh. The caller refreshes once.
+function EventBridge.RouteReplayedEvent(runtime, refreshWindow, eventName, receivedAt, ...)
+  if runtime == nil then
+    return nil
+  end
+  local payload = LivePayload.Build(runtime, eventName, ...)
+  payload.replayedAt = receivedAt
+  runtime.onReactionFallbackDegraded = function(degradedConversation)
+    if degradedConversation and degradedConversation.conversationKey and refreshWindow then
+      refreshWindow(degradedConversation.conversationKey)
+    end
+  end
+  return EventRouter.HandleEvent(runtime, eventName, payload)
+end
+
+function EventBridge.RouteGroupEvent(runtime, eventName, ...)
+  return GroupRouter.RouteGroupEvent(runtime, eventName, ...)
+end
+
+ns.BootstrapEventBridge = EventBridge
+return EventBridge

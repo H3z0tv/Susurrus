@@ -1,0 +1,216 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local ScrollView = ns.ScrollView or require("Susurrus.UI.ScrollView")
+local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
+local LayoutMetrics = ns.MessengerWindowLayoutMetrics or require("Susurrus.UI.MessengerWindow.LayoutBuilder.Metrics")
+local LayoutApply = ns.MessengerWindowLayoutApply or require("Susurrus.UI.MessengerWindow.LayoutBuilder.Apply")
+local LayoutThemeApply = ns.MessengerWindowLayoutThemeApply or require("Susurrus.UI.MessengerWindow.LayoutBuilder.ThemeApply")
+local ContactsSection = ns.MessengerWindowLayoutContactsSection or require("Susurrus.UI.MessengerWindow.LayoutBuilder.ContactsSection")
+local ContentSection = ns.MessengerWindowLayoutContentSection or require("Susurrus.UI.MessengerWindow.LayoutBuilder.ContentSection")
+local OptionsMenuButtons = ns.MessengerWindowLayoutOptionsMenuButtons
+  or require("Susurrus.UI.MessengerWindow.LayoutBuilder.OptionsMenuButtons")
+local OptionsPanelLayout = ns.MessengerWindowLayoutOptionsPanelLayout
+  or require("Susurrus.UI.MessengerWindow.LayoutBuilder.OptionsPanelLayout")
+local RetailChrome = ns.MessengerWindowChromeBuilderRetail or require("Susurrus.UI.MessengerWindow.ChromeBuilder.RetailChrome")
+local applyColorTexture = UIHelpers.applyColorTexture
+
+local LayoutBuilder = {}
+
+LayoutBuilder.ClampContactsWidth = LayoutMetrics.ClampContactsWidth
+
+-- Creates all layout panes inside the window frame.
+--
+-- factory      : frame factory
+-- frame        : the outer window frame (from ChromeBuilder)
+-- initialState : { width, height, contactsWidth? }
+-- options      : { contactsWidth? }
+--
+-- Returns:
+--   contactsPane, contactsDivider, contactsResizeHandle, contentPane, headerDivider,
+--   threadPane, composerPane, optionsPanel, optionsHint,
+--   resetWindowButton, resetIconButton, clearAllChatsButton, contactsView
+function LayoutBuilder.Build(factory, frame, initialState, _options)
+  _options = _options or {}
+  local sizing = LayoutMetrics.CalculateRelayout(
+    { nativeChrome = frame.contentArea ~= nil, contactsCollapsed = initialState.contactsCollapsed == true },
+    initialState.width,
+    initialState.height,
+    _options.contactsWidth or initialState.contactsWidth,
+    Theme
+  )
+  local contactsWidth = sizing.contactsWidth
+  local searchHeight = sizing.searchHeight
+  local searchMargin = sizing.searchMargin
+  local searchTotalHeight = sizing.searchTotalHeight
+  local contactsListHeight = sizing.contactsListHeight
+
+  local contactsSection = ContactsSection.Build(factory, frame, sizing, {
+    theme = Theme,
+  })
+  local contactsPane = contactsSection.contactsPane
+  local contactsPaneBg = contactsSection.contactsPaneBg
+  local contactsSearch = contactsSection.contactsSearch
+  local contactsSearchFrame = contactsSearch.frame
+  local contactsSearchInput = contactsSearch.input
+  local contactsSearchPlaceholder = contactsSearch.placeholder
+  local contactsSearchClearButton = contactsSearch.clearButton
+  local contactsSearchClearLabel = contactsSearch.clearLabel
+  local contactsView = contactsSection.contactsView
+  local contactsDivider = contactsSection.contactsDivider
+  local contactsResizeHandle = contactsSection.contactsResizeHandle
+  local contactsHandleWidth = contactsSection.contactsHandleWidth
+
+  local contentParent = frame.contentArea or frame
+  local contentSection = ContentSection.Build(factory, contentParent, contactsPane, sizing, {
+    theme = Theme,
+  })
+  local contentPane = contentSection.contentPane
+  local threadPane = contentSection.threadPane
+  local composerPane = contentSection.composerPane
+  local headerDivider = nil
+  RetailChrome.AnchorInsets(frame, contactsPane, contentPane)
+
+  local optionsPanelLayout = OptionsPanelLayout.Build(factory, contentParent, initialState, {
+    contactsWidth = sizing.optionsMenuWidth,
+    contactsHeight = sizing.contactsHeight,
+    optionsContentWidth = sizing.optionsContentWidth,
+    nativeChrome = contactsSection.nativeChrome,
+    theme = Theme,
+    scrollView = ScrollView,
+    applyColorTexture = applyColorTexture,
+  })
+  local optionsPanel = optionsPanelLayout.optionsPanel
+  local optionsMenu = optionsPanelLayout.optionsMenu
+  local optionsMenuBg = optionsPanelLayout.optionsMenuBg
+  local menuPadding = optionsPanelLayout.menuPadding
+  local optionsMenuDivider = optionsPanelLayout.optionsMenuDivider
+  local optionsContentPane = optionsPanelLayout.optionsContentPane
+  local optionsContentBg = optionsPanelLayout.optionsContentBg
+  local optionsScrollView = optionsPanelLayout.optionsScrollView
+  local optionsMenuScrollView = optionsPanelLayout.optionsMenuScrollView
+  local OPTIONS_CONTENT_HEIGHT = optionsPanelLayout.optionsContentHeight
+  local refreshOptionsMenuScrollGeometry = optionsPanelLayout.refreshOptionsMenuScrollGeometry
+
+  local optionsMenuButtons = OptionsMenuButtons.Build(factory, optionsMenuScrollView.content, {
+    menuPadding = menuPadding,
+    contactsWidth = sizing.optionsMenuWidth,
+    nativeChrome = contactsSection.nativeChrome,
+    theme = Theme,
+  })
+  optionsPanelLayout.setMenuContentMeasure(optionsMenuButtons.contentHeight)
+  refreshOptionsMenuScrollGeometry()
+  local generalTab = optionsMenuButtons.generalTab
+  local appearanceTab = optionsMenuButtons.appearanceTab
+  local behaviorTab = optionsMenuButtons.behaviorTab
+  local notificationsTab = optionsMenuButtons.notificationsTab
+  local iconsTab = optionsMenuButtons.iconsTab
+  local whatsNewTab = optionsMenuButtons.whatsNewTab
+  local resetWindowButton = optionsMenuButtons.resetWindowButton
+  local resetIconButton = optionsMenuButtons.resetIconButton
+  local clearAllChatsButton = optionsMenuButtons.clearAllChatsButton
+  local optionsHint = optionsMenuButtons.optionsHint
+  local layoutTheme = LayoutThemeApply.Create({
+    theme = Theme,
+    contactsPaneBg = contactsPaneBg,
+    nativeChrome = contactsSection.nativeChrome,
+    nativeSearch = contactsSearch.native == true,
+    applySearchSkin = contactsSearch.applySkin,
+    contactsSearchInput = contactsSearchInput,
+    contactsSearchPlaceholder = contactsSearchPlaceholder,
+    contactsSearchClearLabel = contactsSearchClearLabel,
+    contactsDivider = contactsDivider,
+    optionsMenuBg = optionsMenuBg,
+    optionsMenuDivider = optionsMenuDivider,
+    optionsContentBg = optionsContentBg,
+    optionsHint = optionsHint,
+    settingsTabs = optionsMenuButtons.settingsTabs,
+    resetWindowButton = resetWindowButton,
+    resetIconButton = resetIconButton,
+    clearAllChatsButton = clearAllChatsButton,
+  })
+  local applyTheme = layoutTheme.applyTheme
+  applyTheme(Theme)
+
+  -- Live-language refresh: each sub-builder owns the labels it created and
+  -- exposes its own setLanguage. Aggregating here keeps callers from having
+  -- to know which builder owns which strings.
+  local function setLanguage()
+    if optionsMenuButtons.setLanguage then
+      optionsMenuButtons.setLanguage()
+    end
+    if contactsSearch.setLanguage then
+      contactsSearch.setLanguage()
+    end
+  end
+
+  return {
+    contactsPane = contactsPane,
+    contactsPaneBg = contactsPaneBg,
+    contactsTopOffset = contactsSection.contactsTopOffset,
+    nativeChrome = contactsSection.nativeChrome,
+    contactsDivider = contactsDivider,
+    contactsResizeHandle = contactsResizeHandle,
+    contactsWidth = contactsWidth,
+    contactsCollapsed = initialState.contactsCollapsed == true,
+    expandedContactsWidth = sizing.expandedContactsWidth,
+    contactsHandleWidth = contactsHandleWidth,
+    contactsSearchFrame = contactsSearchFrame,
+    contactsSearchInput = contactsSearchInput,
+    contactsSearchPlaceholder = contactsSearchPlaceholder,
+    contactsSearchClearButton = contactsSearchClearButton,
+    contactsRailSearchButton = contactsSection.railSearchButton,
+    contactsSearchHeight = searchHeight,
+    contactsSearchMargin = searchMargin,
+    contactsSearchTotalHeight = searchTotalHeight,
+    contactsListHeight = contactsListHeight,
+    contactsView = contactsView,
+    optionsContentHeight = OPTIONS_CONTENT_HEIGHT,
+    contentPane = contentPane,
+    headerDivider = headerDivider,
+    threadPane = threadPane,
+    composerPane = composerPane,
+    optionsPanel = optionsPanel,
+    optionsMenu = optionsMenu,
+    optionsMenuBg = optionsMenuBg,
+    optionsMenuDivider = optionsMenuDivider,
+    optionsContentPane = optionsContentPane,
+    optionsContentBg = optionsContentBg,
+    optionsScrollView = optionsScrollView,
+    optionsMenuScrollView = optionsMenuScrollView,
+    refreshOptionsMenuScrollGeometry = refreshOptionsMenuScrollGeometry,
+    generalTab = generalTab,
+    appearanceTab = appearanceTab,
+    behaviorTab = behaviorTab,
+    notificationsTab = notificationsTab,
+    iconsTab = iconsTab,
+    whatsNewTab = whatsNewTab,
+    whispersTab = optionsMenuButtons.whispersTab,
+    chatsTab = optionsMenuButtons.chatsTab,
+    filtersTab = optionsMenuButtons.filtersTab,
+    settingsTabs = optionsMenuButtons.settingsTabs,
+    optionsHint = optionsHint,
+    resetWindowButton = resetWindowButton,
+    resetIconButton = resetIconButton,
+    clearAllChatsButton = clearAllChatsButton,
+    applyTheme = applyTheme,
+    setLanguage = setLanguage,
+  }
+end
+
+-- Recalculate all pane sizes after a frame resize.
+-- layout: the table returned by LayoutBuilder.Build
+-- width, height: new frame dimensions
+-- requestedContactsWidth: optional target contacts pane width
+-- Returns: { contactsWidth, contentWidth, contactsHeight, threadHeight }
+function LayoutBuilder.Relayout(layout, width, height, requestedContactsWidth)
+  local relayout = LayoutMetrics.CalculateRelayout(layout, width, height, requestedContactsWidth, Theme)
+  return LayoutApply.Relayout(layout, relayout, Theme)
+end
+
+ns.MessengerWindowLayoutBuilder = LayoutBuilder
+
+return LayoutBuilder

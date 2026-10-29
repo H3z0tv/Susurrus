@@ -1,0 +1,343 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Identity = ns.Identity or require("Susurrus.Model.Identity")
+local Store = ns.ConversationStore or require("Susurrus.Model.ConversationStore")
+local ChannelType = ns.ChannelType or require("Susurrus.Model.Identity.ChannelType")
+-- stylua: ignore start
+local SecretString = ns.GroupChatIngestSecretString or require("Susurrus.Core.Ingest.GroupChatIngest.SecretString")
+local Direction = ns.GroupChatIngestDirection or require("Susurrus.Core.Ingest.GroupChatIngest.Direction")
+local PendingEcho = ns.GroupChatIngestPendingEcho or require("Susurrus.Core.Ingest.GroupChatIngest.PendingEcho")
+local Message = ns.GroupChatIngestMessage or require("Susurrus.Core.Ingest.GroupChatIngest.Message")
+local Protocol = ns.MessageReactionProtocol or require("Susurrus.Model.MessageReactionProtocol")
+local MessageReactions = ns.MessageReactions or require("Susurrus.Model.MessageReactions")
+-- stylua: ignore end
+
+local GroupChatIngest = {}
+
+-- Map from event name to channel type constant
+local EVENT_TO_CHANNEL = {
+  CHAT_MSG_PARTY = ChannelType.PARTY,
+  CHAT_MSG_PARTY_LEADER = ChannelType.PARTY,
+  CHAT_MSG_INSTANCE_CHAT = ChannelType.INSTANCE_CHAT,
+  CHAT_MSG_INSTANCE_CHAT_LEADER = ChannelType.INSTANCE_CHAT,
+  CHAT_MSG_RAID = ChannelType.RAID,
+  CHAT_MSG_RAID_LEADER = ChannelType.RAID,
+  CHAT_MSG_RAID_WARNING = ChannelType.RAID,
+  CHAT_MSG_GUILD = ChannelType.GUILD,
+  CHAT_MSG_OFFICER = ChannelType.OFFICER,
+  CHAT_MSG_BN_CONVERSATION = ChannelType.BN_CONVERSATION,
+  CHAT_MSG_COMMUNITIES_CHANNEL = ChannelType.COMMUNITY,
+}
+
+-- Events that carry a "leader" flag
+local LEADER_EVENTS = {
+  CHAT_MSG_PARTY_LEADER = true,
+  CHAT_MSG_INSTANCE_CHAT_LEADER = true,
+  CHAT_MSG_RAID_LEADER = true,
+  CHAT_MSG_RAID_WARNING = true,
+}
+
+-- Contact key prefix per channel type (for singleton group channels)
+local CHANNEL_CONTACT_KEY = {
+  [ChannelType.PARTY] = "PARTY::",
+  [ChannelType.INSTANCE_CHAT] = "INSTANCE::",
+  [ChannelType.RAID] = "RAID::",
+  [ChannelType.GUILD] = "GUILD::",
+  [ChannelType.OFFICER] = "OFFICER::",
+}
+
+local GROUP_CONVERSATION_KEY_PREFIX = {
+  [ChannelType.PARTY] = "party::",
+  [ChannelType.INSTANCE_CHAT] = "instance::",
+  [ChannelType.RAID] = "raid::",
+}
+
+local REACTION_CHANNELS = {
+  PARTY = ChannelType.PARTY,
+  RAID = ChannelType.RAID,
+  INSTANCE_CHAT = ChannelType.INSTANCE_CHAT,
+  GUILD = ChannelType.GUILD,
+  OFFICER = ChannelType.OFFICER,
+}
+
+local function requiresSessionGuid(channel)
+  return GROUP_CONVERSATION_KEY_PREFIX[channel] ~= nil
+end
+
+local function groupCategoryForChannel(channel)
+  if channel == ChannelType.PARTY or channel == ChannelType.RAID then
+    return type(_G.LE_PARTY_CATEGORY_HOME) == "number" and _G.LE_PARTY_CATEGORY_HOME or 1
+  end
+  if channel == ChannelType.INSTANCE_CHAT then
+    return type(_G.LE_PARTY_CATEGORY_INSTANCE) == "number" and _G.LE_PARTY_CATEGORY_INSTANCE or 2
+  end
+  return nil
+end
+
+local function buildGroupSessionKey(state, channel)
+  local prefix = GROUP_CONVERSATION_KEY_PREFIX[channel]
+  local category = groupCategoryForChannel(channel)
+  local partyGUIDs = state.groupPartyGUIDsByCategory
+  local partyGUID = partyGUIDs and partyGUIDs[category]
+  if prefix == nil or type(state.localProfileId) ~= "string" or state.localProfileId == "" or type(partyGUID) ~= "string" or partyGUID == "" then
+    return nil
+  end
+
+  return prefix .. state.localProfileId .. "::" .. category .. "::" .. partyGUID, category, partyGUID
+end
+
+local function resolveGroupConversation(state, channel)
+  if not ChannelType.ADDON_GROUP_CHANNELS[channel] then
+    return nil
+  end
+  local contactKeyPrefix = CHANNEL_CONTACT_KEY[channel]
+  local guildName
+  if channel == ChannelType.GUILD and type(_G.GetGuildInfo) == "function" then
+    local ok, name = pcall(_G.GetGuildInfo, "player")
+    if ok and type(name) == "string" and name ~= "" then
+      guildName = name
+      contactKeyPrefix = "GUILD::" .. name
+    end
+  end
+  local conversationKey, groupCategory, partyGUID = buildGroupSessionKey(state, channel)
+  if conversationKey == nil then
+    conversationKey = Identity.BuildConversationKey(state.localProfileId, contactKeyPrefix)
+  end
+  return conversationKey, groupCategory, partyGUID, guildName
+end
+
+-- Tells the router a mention arrived so it can alert (sound + flash).
+-- Read-only, shared to avoid a table per mention.
+local MENTION_META = { mention = true }
+
+local function mentionMeta(message)
+  return message.mention and MENTION_META or nil
+end
+
+-- appendAndStamp resolves direction, builds the message, routes it to the
+-- store, and stamps the conversation record with its key. Returns the
+-- conversation record (may be nil if the store hasn't created it yet).
+local function appendAndStamp(state, conversationKey, channel, eventName, payload, isLeader)
+  local direction = Direction.Resolve(eventName, payload, state)
+  local sentAt = (state.now and state.now()) or 0
+  local msg = Message.Build(payload, direction, channel, sentAt, isLeader)
+  if direction == "out" then
+    Store.AppendOutgoing(state.store, conversationKey, msg)
+  else
+    local isActive = state.activeConversationKey == conversationKey
+    Store.AppendIncoming(state.store, conversationKey, msg, isActive)
+  end
+  local conversation = state.store.conversations[conversationKey]
+  if conversation then
+    conversation.conversationKey = conversationKey
+  end
+  return conversation, mentionMeta(msg)
+end
+
+local function groupSenderKey(playerName, conversationKey)
+  if type(playerName) ~= "string" or type(conversationKey) ~= "string" then
+    return nil
+  end
+  local ok, normalized = pcall(string.lower, playerName)
+  return ok and normalized .. "::" .. conversationKey or nil
+end
+
+local function appendGroupMessage(state, conversationKey, channel, eventName, payload, isLeader, groupCategory, partyGUID)
+  local direction = Direction.Resolve(eventName, payload, state)
+  local sentAt = (state.now and state.now()) or 0
+  PendingEcho.PruneAll(state, sentAt)
+  local message = Message.Build(payload, direction, channel, sentAt, isLeader)
+  if direction == "out" then
+    local pending = PendingEcho.Consume(state, conversationKey, channel, message.text)
+    if pending and pending.reactionControl then
+      local control = pending.reactionControl
+      local changed, target = MessageReactions.ApplyOperation(state, conversationKey, control.operation, control.actorName, nil, sentAt)
+      if target then
+        control.confirmed = true
+        MessageReactions.ClearPending(target, control.pendingToken)
+        return state.store.conversations[conversationKey], { reactionControl = true, reactionChanged = changed == true }
+      end
+    elseif pending then
+      message.wireId = pending.wireId
+    end
+    Store.AppendOutgoing(state.store, conversationKey, message)
+  else
+    local senderKey = groupSenderKey(payload.playerName, conversationKey)
+    local canCorrelate = not requiresSessionGuid(channel) or (type(partyGUID) == "string" and partyGUID ~= "")
+    if senderKey and canCorrelate then
+      MessageReactions.AttachIncomingIdentity(state, senderKey, conversationKey, message, sentAt)
+      local function appendDegraded(controlMessage)
+        local isActive = state.activeConversationKey == conversationKey
+        Store.InsertIncomingChronological(state.store, conversationKey, controlMessage, isActive)
+        local degraded = state.store.conversations[conversationKey]
+        if degraded then
+          degraded.conversationKey = conversationKey
+          if partyGUID then
+            degraded.ownerProfileId = state.localProfileId
+            degraded.groupCategory = groupCategory
+            degraded.partyGUID = partyGUID
+          end
+        end
+        if type(state.onGroupReactionFallbackDegraded) == "function" then
+          state.onGroupReactionFallbackDegraded(degraded)
+        end
+      end
+      local controlResult = MessageReactions.ConsumeIncomingControl(
+        state,
+        senderKey,
+        conversationKey,
+        payload.playerName,
+        message,
+        nil,
+        sentAt,
+        appendDegraded,
+        nil,
+        Protocol.ParseGroupFallback
+      )
+      if controlResult and controlResult.staged then
+        return nil, { reactionControl = true, reactionStaged = true }
+      end
+      if controlResult and controlResult.converted then
+        return state.store.conversations[conversationKey], { reactionControl = true, reactionChanged = controlResult.changed == true }
+      end
+      if controlResult and controlResult.degraded then
+        return state.store.conversations[conversationKey], { reactionDegraded = true }
+      end
+    end
+    local isActive = state.activeConversationKey == conversationKey
+    Store.AppendIncoming(state.store, conversationKey, message, isActive)
+  end
+  local conversation = state.store.conversations[conversationKey]
+  if conversation then
+    conversation.conversationKey = conversationKey
+  end
+  return conversation, mentionMeta(message)
+end
+
+function GroupChatIngest.HandleAddonEvent(state, payload)
+  if type(state) ~= "table" or type(payload) ~= "table" then
+    return nil
+  end
+  local channel = REACTION_CHANNELS[payload.channel]
+  local conversationKey
+  local partyGUID
+  local _
+  if channel then
+    conversationKey, _, partyGUID = resolveGroupConversation(state, channel)
+  end
+  if requiresSessionGuid(channel) and (type(partyGUID) ~= "string" or partyGUID == "") then
+    return nil
+  end
+  local senderKey = groupSenderKey(payload.playerName, conversationKey)
+  local metadata = Protocol.Decode(payload.text)
+  if senderKey == nil or metadata == nil then
+    return nil
+  end
+  local now = (state.now and state.now()) or 0
+  if metadata.type == "identity" then
+    MessageReactions.RecordIdentity(state, senderKey, conversationKey, metadata, now)
+    return nil
+  end
+  if metadata.type ~= "groupReaction" then
+    return nil
+  end
+  local result = MessageReactions.RecordOperation(state, senderKey, conversationKey, payload.playerName, metadata, nil, now)
+  if result and result.converted then
+    local conversation = state.store.conversations[conversationKey]
+    if conversation then
+      conversation.conversationKey = conversationKey
+    end
+    return conversation, { reactionControl = true, reactionChanged = result.changed == true }
+  end
+  return nil
+end
+
+-- HandleEvent processes one of the 5 group chat events.
+-- Returns true when the event was recognized and routed; false otherwise.
+function GroupChatIngest.HandleEvent(state, eventName, payload)
+  local channel = EVENT_TO_CHANNEL[eventName]
+  if channel == nil then
+    return false
+  end
+
+  -- Drop messages carrying 12.0 "secret string" fields. Storing them would
+  -- poison every downstream read (ConversationSnapshot search text, bubble
+  -- rendering, etc.). Blizzard's default chat frame still renders the line
+  -- via its secure path, so the user doesn't lose visibility.
+  if SecretString.PayloadHasSecretFields(payload, GroupChatIngest._isSecretString) then
+    return false
+  end
+
+  -- BN_CONVERSATION requires a conversationID to build a stable key.
+  if channel == ChannelType.BN_CONVERSATION then
+    if payload.conversationID == nil then
+      return false
+    end
+    local conversationKey = Identity.BuildConversationKey(state.localProfileId, "BNCONV::" .. tostring(payload.conversationID))
+    local conversation, meta = appendAndStamp(state, conversationKey, channel, eventName, payload, nil)
+    if conversation then
+      conversation.conversationID = payload.conversationID
+    end
+    return true, conversation, meta
+  end
+
+  -- COMMUNITY: keyed by (clubId, streamId). Receive-only — Blizzard blocks
+  -- C_Club.SendMessage for addons since patch 8.1.0.
+  if channel == ChannelType.COMMUNITY then
+    if payload.clubId == nil or payload.streamId == nil then
+      return false
+    end
+    local contactKey = "COMMUNITY::" .. tostring(payload.clubId) .. "::" .. tostring(payload.streamId)
+    local conversationKey = Identity.BuildConversationKey(state.localProfileId, contactKey)
+    local conv, meta = appendAndStamp(state, conversationKey, channel, eventName, payload, nil)
+    if conv then
+      -- Use the stream's base name as the sticky title so the row shows
+      -- "General" or "Trade" instead of the generic "Community" label.
+      if type(payload.streamName) == "string" and payload.streamName ~= "" then
+        conv.title = payload.streamName
+      end
+    end
+    return true, conv, meta
+  end
+
+  -- PARTY / INSTANCE_CHAT / RAID use a per-session key when lifecycle
+  -- events supplied a party GUID; otherwise they retain singleton behavior.
+  -- OFFICER is singleton. GUILD resolves to its account-wide guild key when
+  -- the live guild name is available.
+  local conversationKey, groupCategory, partyGUID, guildName = resolveGroupConversation(state, channel)
+  local isLeader = LEADER_EVENTS[eventName] == true and true or false
+  local conv
+  local resultMeta
+  if ChannelType.ADDON_GROUP_CHANNELS[channel] then
+    conv, resultMeta = appendGroupMessage(state, conversationKey, channel, eventName, payload, isLeader, groupCategory, partyGUID)
+  else
+    conv, resultMeta = appendAndStamp(state, conversationKey, channel, eventName, payload, isLeader)
+  end
+
+  if conv and partyGUID then
+    conv.ownerProfileId = state.localProfileId
+    conv.groupCategory = groupCategory
+    conv.partyGUID = partyGUID
+  end
+
+  -- Stamp the conversation record with the guild's display name
+  -- (so the conversation header can show it even when another character
+  -- is logged in), and the last-writing character's profileId (used to
+  -- disambiguate "CharName — Guild" for alts not currently in this guild).
+  if conv and channel == ChannelType.GUILD and guildName then
+    conv.guildName = guildName
+    conv.ownerProfileId = state.localProfileId
+  end
+
+  return true, conv, resultMeta
+end
+
+-- Override seam for tests that simulate 12.0 "secret string" taint throws.
+GroupChatIngest._isSecretString = SecretString.IsSecretString
+
+ns.GroupChatIngest = GroupChatIngest
+
+return GroupChatIngest

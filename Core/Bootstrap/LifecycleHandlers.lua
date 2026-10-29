@@ -1,0 +1,111 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Competitive = ns.BootstrapLifecycleHandlersCompetitive
+  or (type(require) == "function" and require("Susurrus.Core.Bootstrap.LifecycleHandlers.Competitive"))
+  or nil
+
+local Presence = ns.BootstrapLifecycleHandlersPresence
+  or (type(require) == "function" and require("Susurrus.Core.Bootstrap.LifecycleHandlers.Presence"))
+  or nil
+
+local RestrictionState = ns.BootstrapLifecycleHandlersRestrictionState
+  or (type(require) == "function" and require("Susurrus.Core.Bootstrap.LifecycleHandlers.RestrictionState"))
+  or nil
+
+local GroupMembership = ns.BootstrapLifecycleHandlersGroupMembership
+  or (type(require) == "function" and require("Susurrus.Core.Bootstrap.LifecycleHandlers.GroupMembership"))
+  or nil
+local OnlineNotify = ns.BootstrapLifecycleHandlersOnlineNotify or require("Susurrus.Core.Bootstrap.LifecycleHandlers.OnlineNotify")
+local MessageReactions = ns.MessageReactions or require("Susurrus.Model.MessageReactions")
+
+local LifecycleHandlers = {}
+
+function LifecycleHandlers.Handle(Bootstrap, event, deps, ...)
+  if event == "ADDON_RESTRICTION_STATE_CHANGED" then
+    local restrictionType, newState = ...
+    return RestrictionState.handleAddonRestrictionStateChanged(Bootstrap, restrictionType, newState, deps)
+  end
+
+  if event == "BN_FRIEND_LIST_SIZE_CHANGED" or event == "BN_FRIEND_INFO_CHANGED" then
+    return Presence.handleBNetFriendEvent(Bootstrap, deps)
+  end
+
+  if event == "FRIENDLIST_UPDATE" then
+    return OnlineNotify.handleFriendListUpdate(Bootstrap)
+  end
+
+  if event == "BN_FRIEND_ACCOUNT_ONLINE" or event == "BN_FRIEND_ACCOUNT_OFFLINE" then
+    local bnetAccountID = ...
+    return OnlineNotify.handleBNetAccountEvent(Bootstrap, bnetAccountID, event == "BN_FRIEND_ACCOUNT_ONLINE")
+  end
+
+  if event == "PLAYER_LOGOUT" then
+    if Bootstrap.runtime then
+      MessageReactions.FlushControls(Bootstrap.runtime)
+      MessageReactions.ClearTransient(Bootstrap.runtime)
+    end
+    -- Group chats (party, raid, instance) are persisted across /reload and
+    -- logout so the user can keep recent history. Membership transitions
+    -- are tracked separately via GROUP_ROSTER_UPDATE.
+    return Presence.handlePlayerLogout(Bootstrap)
+  end
+
+  if event == "GROUP_FORMED" or event == "GROUP_JOINED" then
+    local category, partyGUID = ...
+    return GroupMembership.handleGroupJoined(Bootstrap, category, partyGUID)
+  end
+
+  if event == "GROUP_LEFT" then
+    local category, partyGUID = ...
+    return GroupMembership.handleGroupLeft(Bootstrap, category, partyGUID)
+  end
+
+  if event == "GROUP_ROSTER_UPDATE" then
+    return GroupMembership.handleGroupRosterUpdate(Bootstrap)
+  end
+
+  if Competitive.handleChallengeModeEvent(Bootstrap, event) then
+    return true
+  end
+
+  if Competitive.handleEncounterEvent(Bootstrap, event, deps) then
+    return true
+  end
+
+  if event == "PLAYER_REGEN_DISABLED" then
+    return Competitive.handleCombatStart(Bootstrap)
+  end
+
+  if event == "PLAYER_REGEN_ENABLED" then
+    return Competitive.handleCombatEnd(Bootstrap, deps)
+  end
+
+  if event == "ZONE_CHANGED_NEW_AREA" then
+    return Competitive.handleZoneChangedNewArea(Bootstrap, deps)
+  end
+
+  if event == "PLAYER_ENTERING_WORLD" then
+    return Presence.handlePlayerEnteringWorld(Bootstrap, deps)
+  end
+
+  if event == "UPDATE_BINDINGS" or event == "HOUSE_EDITOR_MODE_CHANGED" then
+    -- User remapped REPLY, or opened/closed the house editor (which needs R
+    -- for "remove decor"). Re-run syncReplyKey so our override follows.
+    if Bootstrap.runtime and Bootstrap.runtime.syncReplyKey then
+      Bootstrap.runtime.syncReplyKey()
+    end
+    return true
+  end
+
+  if event == "GUILD_ROSTER_UPDATE" or event == "CLUB_MEMBER_UPDATED" or event == "CLUB_MEMBER_ADDED" or event == "CLUB_MEMBER_REMOVED" then
+    return Presence.handlePresenceInvalidation(Bootstrap, deps)
+  end
+
+  return false
+end
+
+ns.BootstrapLifecycleHandlers = LifecycleHandlers
+return LifecycleHandlers

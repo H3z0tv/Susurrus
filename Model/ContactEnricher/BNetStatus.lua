@@ -1,0 +1,154 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local BNetStatus = {}
+
+-- True only while the friend is logged into a WoW character. Offline friends
+-- and Battle.net-app-only friends report no (or empty) characterName; any
+-- className/areaName beside it is stale and must not be copied.
+function BNetStatus.IsInWoW(gameInfo)
+  return gameInfo ~= nil and type(gameInfo.characterName) == "string" and gameInfo.characterName ~= ""
+end
+
+-- Presence rule shared by the contact status and "Notify when online":
+-- true when the account, its game account or a WoW character is online,
+-- false when the API says offline, nil when unknown.
+function BNetStatus.IsOnline(accountInfo)
+  if type(accountInfo) ~= "table" then
+    return nil
+  end
+  local gameInfo = accountInfo.gameAccountInfo
+  local gameOnline = gameInfo and gameInfo.isOnline
+  if accountInfo.isOnline == true or gameOnline == true or BNetStatus.IsInWoW(gameInfo) then
+    return true
+  end
+  if accountInfo.isOnline == false or gameOnline == false then
+    return false
+  end
+  return nil
+end
+
+-- Copy live character metadata from gameInfo onto target (a contact item or a
+-- stored conversation). className, classTag, raceName and characterLevel are
+-- written together so the class icon, class text, race and level never
+-- describe different characters.
+-- Returns true when metadata was applied (i.e. the friend is in WoW).
+function BNetStatus.ApplyGameInfoMetadata(target, gameInfo, runtime)
+  if not BNetStatus.IsInWoW(gameInfo) then
+    return false
+  end
+  if gameInfo.factionName and gameInfo.factionName ~= "" then
+    target.factionName = gameInfo.factionName
+  end
+  if gameInfo.areaName and gameInfo.areaName ~= "" then
+    target.areaName = gameInfo.areaName
+  end
+  local guid = gameInfo.playerGuid or target.guid
+  local BNetResolver = ns.BNetResolver or require("Susurrus.Transport.BNetResolver")
+  local playerInfo = guid and BNetResolver.ResolvePlayerInfo(runtime.playerInfoByGUID, guid)
+  if playerInfo and playerInfo.classTag then
+    target.classTag = playerInfo.classTag
+    target.className = (gameInfo.className ~= nil and gameInfo.className ~= "") and gameInfo.className or playerInfo.className or target.className
+    target.raceName = (gameInfo.raceName ~= nil and gameInfo.raceName ~= "") and gameInfo.raceName or playerInfo.raceName or target.raceName
+    if playerInfo.raceTag then
+      target.raceTag = playerInfo.raceTag
+    end
+    -- An unknown level clears the old one: it may belong to another character.
+    local level = gameInfo.characterLevel
+    target.characterLevel = (type(level) == "number" and level > 0) and level or nil
+  end
+  -- else: classTag unresolvable — leave className, classTag, race and level untouched
+  -- (stale but consistent beats a mismatched icon/text pair)
+  return true
+end
+
+-- Apply live BNet status and refresh metadata from the BNet API for a BNet contact.
+-- Handles ResolveAccountInfo, isOnline/isAFK/isDND/isGameAFK sticky-flag logic,
+-- metadata refresh from gameAccountInfo, and presence-cache fallback when
+-- accountInfo is nil.
+-- Called when: item.channel == "BN" and item.bnetAccountID is set.
+function BNetStatus.Apply(item, runtime)
+  local BNetResolver = ns.BNetResolver or require("Susurrus.Transport.BNetResolver")
+  local Availability = ns.Availability or require("Susurrus.Transport.Availability")
+  local PresenceCache = ns.PresenceCache or require("Susurrus.Model.PresenceCache")
+
+  local accountInfo = BNetResolver.ResolveAccountInfo(runtime.bnetApi, item.bnetAccountID, item.guid, item.battleTag or item.displayName)
+  if accountInfo then
+    if accountInfo.bnetAccountID then
+      item.bnetAccountID = accountInfo.bnetAccountID
+      if runtime.store and runtime.store.conversations and item.conversationKey then
+        local conversation = runtime.store.conversations[item.conversationKey]
+        if conversation then
+          conversation.bnetAccountID = item.bnetAccountID
+        end
+      end
+    end
+    local gameInfo = accountInfo.gameAccountInfo
+    -- The live BNetAccountInfo struct has no top-level isOnline; presence lives
+    -- on gameAccountInfo.isOnline (Blizzard's FriendsFrame reads the same field).
+    -- isAFK/isDND are STICKY — they persist after a friend goes offline and are
+    -- valid only as sub-status once presence is proven.
+    local inWoW = BNetStatus.IsInWoW(gameInfo)
+    local isOnline = BNetStatus.IsOnline(accountInfo)
+    -- Blizzard's "last online" time; nil while online. Read by the header.
+    item.lastOnlineTime = not isOnline and tonumber(accountInfo.lastOnlineTime) or nil
+    if isOnline then
+      -- Check AFK/DND first (applies whether in WoW or BNet app)
+      local bnetStatus
+      if accountInfo.isAFK or (gameInfo and gameInfo.isGameAFK) then
+        bnetStatus = "Away"
+      elseif accountInfo.isDND or (gameInfo and gameInfo.isGameBusy) then
+        bnetStatus = "Busy"
+      elseif not inWoW then
+        -- Online in BNet app or another Blizzard game, not in WoW
+        bnetStatus = "BNetOnline"
+      else
+        bnetStatus = "CanWhisper"
+      end
+      item.availability = Availability.FromStatus(bnetStatus)
+      -- Refresh potentially stale metadata from live BNet data, but only
+      -- while the friend is actually in WoW — otherwise leave it as-is.
+      BNetStatus.ApplyGameInfoMetadata(item, gameInfo, runtime)
+    elseif isOnline == false then
+      -- BNet API explicitly says offline; fall back to guild/community presence
+      local presence = item.guid and PresenceCache.GetPresence(item.guid) or nil
+      if presence == "online" then
+        -- BNet whispers are always cross-faction; no XFaction needed
+        item.availability = Availability.FromStatus("CanWhisper")
+      else
+        item.availability = Availability.FromStatus("Offline")
+      end
+    elseif accountInfo.isOnline == nil then
+      -- isOnline is nil (unknown at account level). Could be BNet mobile app user
+      -- or API still loading. Check guild/community presence for ground truth.
+      local presence = item.guid and PresenceCache.GetPresence(item.guid) or nil
+      if presence == "online" then
+        -- Guild/community says online — they're in WoW, BNet API just hasn't caught up
+        item.availability = Availability.FromStatus("CanWhisper")
+      elseif presence == "offline" then
+        -- Guild/community explicitly offline — trust the positive signal over the
+        -- ambiguous BNet state; don't fall back to "probably mobile" BNetOnline.
+        item.availability = Availability.FromStatus("Offline")
+      else
+        -- No presence cache entry — no way to disambiguate; likely BNet mobile app.
+        item.availability = Availability.FromStatus("BNetOnline")
+      end
+    end
+  end
+  -- BNet contact without resolvable accountInfo (API has no data for this friend):
+  -- trust guild/community presence if we have it, otherwise default to Offline so
+  -- the status bar always shows a concrete state instead of leaking stale data.
+  if item.availability == nil then
+    local presence = item.guid and PresenceCache.GetPresence(item.guid) or nil
+    if presence == "online" then
+      item.availability = Availability.FromStatus("CanWhisper")
+    else
+      item.availability = Availability.FromStatus("Offline")
+    end
+  end
+end
+
+ns.ContactEnricherBNetStatus = BNetStatus
+return BNetStatus

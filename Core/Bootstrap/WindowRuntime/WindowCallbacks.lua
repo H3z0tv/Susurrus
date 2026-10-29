@@ -1,0 +1,298 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Store = ns.ConversationStore or require("Susurrus.Model.ConversationStore")
+local TableUtils = ns.TableUtils or require("Susurrus.Util.TableUtils")
+local ReactionHandler = ns.BootstrapReactionHandler or require("Susurrus.Core.Bootstrap.ReactionHandler")
+local InviteHandler = ns.BootstrapInviteHandler or require("Susurrus.Core.Bootstrap.InviteHandler")
+local MessageReactions = ns.MessageReactions or require("Susurrus.Model.MessageReactions")
+local ConversationDrafts = ns.ConversationDrafts or require("Susurrus.Model.ConversationDrafts")
+local ContactPrefs = ns.ContactPrefs or require("Susurrus.Model.ContactPrefs")
+local MessageRequests = ns.MessageRequests or require("Susurrus.Model.MessageRequests")
+local OnlineWatch = ns.OnlineWatch or require("Susurrus.Model.OnlineWatch")
+local IgnoreList = ns.IgnoreList or require("Susurrus.Model.Filters.IgnoreList")
+local QueuedSends = ns.BootstrapQueuedSends or require("Susurrus.Core.Bootstrap.QueuedSends")
+local ContactsTabFilter = ns.ContactsTabFilter or require("Susurrus.UI.ContactsList.ContactsTabFilter")
+local IconPosition = ns.BootstrapWindowRuntimeIconPosition or require("Susurrus.Core.Bootstrap.WindowRuntime.IconPosition")
+local WhoTriggers = ns.BootstrapWindowRuntimeWhoTriggers or require("Susurrus.Core.Bootstrap.WindowRuntime.WhoTriggers")
+local AddonAlerts = ns.BootstrapWindowRuntimeAddonAlerts or require("Susurrus.Core.Bootstrap.WindowRuntime.AddonAlerts")
+
+local WindowCallbacks = {}
+
+WindowCallbacks.ApplyIconPosition = IconPosition.Apply
+
+function WindowCallbacks.Create(options)
+  options = options or {}
+
+  local runtime = options.runtime or {}
+  local accountState = options.accountState or {}
+
+  local characterState = options.characterState or {}
+  local defaultCharacterState = options.defaultCharacterState or {}
+  local uiParent = options.uiParent
+  local getIcon = options.getIcon or function()
+    return nil
+  end
+  local tableUtils = options.tableUtils or TableUtils
+  local groupSendPolicy = options.groupSendPolicy
+  local sendHandler = options.sendHandler
+  local reactionHandler = options.reactionHandler or ReactionHandler
+  local inviteHandler = options.inviteHandler or InviteHandler
+  local livePresenceSender = options.livePresenceSender
+  local refreshWindow = options.refreshWindow or function() end
+  local buildContacts = options.buildContacts or function()
+    return {}
+  end
+  local selectConversation = options.selectConversation or function(_conversationKey) end
+  local startConversation = options.startConversation or function() end
+  local setWindowVisible = options.setWindowVisible or function() end
+  local dismissWidgetPreview = options.dismissWidgetPreview or function() end
+  local whoTriggers = WhoTriggers.Create(runtime)
+
+  local function canReact(selectedContact, message)
+    if type(runtime.isCompetitiveContent) == "function" and runtime.isCompetitiveContent() then
+      return false
+    end
+    if type(selectedContact) ~= "table" or not MessageReactions.IsEligible(message, selectedContact.channel) then
+      return false
+    end
+    if selectedContact.channel == "WOW" or selectedContact.channel == "BN" then
+      return true
+    end
+    if type(groupSendPolicy) ~= "table" or type(groupSendPolicy.getNotice) ~= "function" then
+      return false
+    end
+    return groupSendPolicy.getNotice(selectedContact.conversation or selectedContact) == nil
+  end
+
+  -- The block list changed: hide or show the player in the game's chat too.
+  local function filtersChanged()
+    if runtime.syncChatFilters then
+      runtime.syncChatFilters()
+    end
+    refreshWindow()
+  end
+
+  local function removeConversation(item)
+    local key = item and item.conversationKey
+    if key == nil then
+      return
+    end
+    MessageReactions.ClearConversation(runtime, key)
+    Store.Remove(runtime.store, key)
+    if runtime.activeConversationKey == key then
+      runtime.activeConversationKey = nil
+      characterState.activeConversationKey = nil
+    end
+    refreshWindow()
+  end
+
+  -- The request below `key` on the Requests tab, or the one above when it
+  -- is the last; nil when it is the only one.
+  local function neighbourRequestKey(key)
+    local requests = ContactsTabFilter.FilterRequests(buildContacts())
+    for index, item in ipairs(requests) do
+      if item.conversationKey == key then
+        local neighbour = requests[index + 1] or requests[index - 1]
+        return neighbour and neighbour.conversationKey or nil
+      end
+    end
+    return nil
+  end
+
+  return {
+    onTabModeChanged = function(mode)
+      characterState.contactsTabMode = mode
+    end,
+
+    onContactClicked = whoTriggers.onContactClicked,
+    whoPlayer = whoTriggers.whoPlayer,
+
+    onSelectConversation = function(conversationKey)
+      return selectConversation(conversationKey)
+    end,
+
+    onStartConversation = function(playerName)
+      return startConversation(playerName)
+    end,
+
+    onSend = whoTriggers.wrapSend(function(payload)
+      if groupSendPolicy and groupSendPolicy.shouldRoutePayload(payload) then
+        return groupSendPolicy.sendPayload(payload)
+      end
+      local sent = sendHandler.HandleSend(runtime, payload, refreshWindow)
+      -- Queued or failed: the text is safe in history, so the composer clears.
+      return sent or payload.deliveryRecorded == true
+    end),
+    -- Delivery menu: "send_now" / "discard" / "retry" (sends again).
+    onMessageAction = function(selectedContact, message, action)
+      local key = type(selectedContact) == "table" and selectedContact.conversationKey or nil
+      if key == nil then
+        return false
+      end
+      return QueuedSends.HandleAction(runtime, key, message, action, sendHandler, refreshWindow)
+    end,
+    onReact = function(selectedContact, message, reactionKey)
+      return reactionHandler.HandleReact(runtime, selectedContact, message, reactionKey, refreshWindow, groupSendPolicy)
+    end,
+    canReact = canReact,
+    onInviteContact = function(selectedContact)
+      return inviteHandler.HandleInvite(runtime, selectedContact, refreshWindow)
+    end,
+    canInviteContact = function()
+      return InviteHandler.IsEnabled(runtime)
+    end,
+    onTyping = function(selectedContact, text)
+      if livePresenceSender == nil then
+        return false
+      end
+      return livePresenceSender.OnComposerText(runtime, selectedContact, text)
+    end,
+
+    getDraft = function(conversationKey)
+      return ConversationDrafts.Get(runtime.store, conversationKey)
+    end,
+
+    onDraftChanged = function(conversationKey, text)
+      ConversationDrafts.Set(runtime.store, conversationKey, text)
+    end,
+
+    onPositionChanged = function(nextState)
+      characterState.window = tableUtils.copyState(nextState)
+    end,
+
+    onClose = function()
+      setWindowVisible(false)
+    end,
+
+    onResetWindowPosition = function()
+      local nextState = tableUtils.copyState(defaultCharacterState.window)
+      characterState.window = nextState
+      return nextState
+    end,
+
+    onClearAllChats = function()
+      MessageReactions.ClearAll(runtime)
+      for key in pairs(runtime.store.conversations) do
+        Store.Remove(runtime.store, key)
+      end
+      runtime.activeConversationKey = nil
+      characterState.activeConversationKey = nil
+    end,
+
+    onPin = function(item)
+      local key = item.conversationKey
+      if Store.IsPinned(runtime.store, key) then
+        Store.Unpin(runtime.store, key)
+        if runtime.store.conversations[key] == nil and runtime.activeConversationKey == key then
+          runtime.activeConversationKey = nil
+          characterState.activeConversationKey = nil
+        end
+      else
+        Store.Pin(runtime.store, key)
+      end
+      refreshWindow()
+    end,
+
+    onRemove = removeConversation,
+
+    -- Request banner: Accept moves it to Whispers and keeps it open there.
+    onAcceptRequest = function(item)
+      local key = item and item.conversationKey
+      if key == nil then
+        return
+      end
+      MessageRequests.Accept(runtime.store, key)
+      if runtime.window and runtime.window.setTabMode then
+        runtime.window.setTabMode("whispers")
+      end
+      selectConversation(key)
+    end,
+    -- Request banner: Delete opens the next request, so the empty page
+    -- shows only once none are left.
+    onDeleteRequest = function(item)
+      local key = item and item.conversationKey
+      if key == nil then
+        return
+      end
+      local nextKey = neighbourRequestKey(key)
+      removeConversation(item)
+      if nextKey then
+        selectConversation(nextKey)
+      end
+    end,
+
+    onMarkUnread = function(item)
+      local key = item and item.conversationKey
+      if key == nil then
+        return
+      end
+      Store.MarkUnread(runtime.store, key)
+      refreshWindow()
+    end,
+
+    -- Also acknowledges the icon popup and other addons' alerts, so nothing still signals unread.
+    onMarkAllRead = function()
+      Store.MarkAllRead(runtime.store)
+      dismissWidgetPreview()
+      AddonAlerts.Clear(runtime)
+      refreshWindow()
+    end,
+
+    -- Mute / nickname / note / notify-when-online from the contact row menu.
+    onUpdatePrefs = function(item, changes)
+      local key = item and item.conversationKey
+      if key == nil then
+        return
+      end
+      ContactPrefs.Apply(runtime.store, key, changes)
+      -- Record the friend's state now so their next login is a change.
+      if changes and changes.notifyOnline == true then
+        OnlineWatch.Observe(runtime, key, OnlineWatch.ReadOnline(runtime, runtime.store.conversations[key]))
+      end
+      refreshWindow()
+    end,
+
+    -- "Block…" from a contact row or a message.
+    onIgnorePlayer = function(name, reason)
+      if IgnoreList.Add(IgnoreList.Ensure(accountState), name, { reason = reason }) ~= nil then
+        filtersChanged()
+      end
+    end,
+
+    -- "Unblock" from a blocked player's contact row.
+    onUnblockPlayer = function(name)
+      IgnoreList.Remove(IgnoreList.Ensure(accountState), name)
+      filtersChanged()
+    end,
+
+    isPlayerBlocked = function(name)
+      local now = type(runtime.now) == "function" and runtime.now() or nil
+      return IgnoreList.Lookup(IgnoreList.Ensure(accountState), name, now) ~= nil
+    end,
+
+    onReorder = function(orders)
+      for key, order in pairs(orders) do
+        Store.SetSortOrder(runtime.store, key, order)
+      end
+      refreshWindow()
+    end,
+
+    onResetIconPosition = function()
+      local nextState = tableUtils.copyState(defaultCharacterState.icon)
+      if accountState.settings and accountState.settings.shareWidgetPosition == true then
+        accountState.sharedWidgetPosition = nextState
+      else
+        characterState.icon = nextState
+      end
+
+      return WindowCallbacks.ApplyIconPosition(getIcon(), nextState, uiParent)
+    end,
+  }
+end
+
+ns.BootstrapWindowRuntimeWindowCallbacks = WindowCallbacks
+
+return WindowCallbacks

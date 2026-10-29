@@ -1,0 +1,39 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Schema = ns.Schema or require("Susurrus.Persistence.Schema")
+local Migrations = ns.Migrations or require("Susurrus.Persistence.Migrations")
+local Helpers = ns.PersistenceHelpers or require("Susurrus.Persistence.Helpers")
+-- stylua: ignore start
+local LegacyMigration = ns.SavedStateLegacyMigration or require("Susurrus.Persistence.SavedState.LegacyMigration")
+local PrefixMigration = ns.SavedStatePrefixMigration or require("Susurrus.Persistence.SavedState.PrefixMigration")
+-- stylua: ignore end
+
+local SavedState = {}
+
+function SavedState.Initialize(accountState, characterState, localProfileId)
+  local account = Migrations.Apply(accountState, Schema)
+  local defaults = Schema.NewCharacterState()
+  local character = characterState or defaults
+
+  character.window = character.window or defaults.window
+  Helpers.applyDefaults(character.window, defaults.window)
+
+  character.icon = character.icon or defaults.icon
+  Helpers.applyDefaults(character.icon, defaults.icon)
+
+  character.minimapIcon = character.minimapIcon or defaults.minimapIcon
+  Helpers.applyDefaults(character.minimapIcon, defaults.minimapIcon)
+
+  LegacyMigration.MigrateCurrentProfile(account, character, localProfileId)
+  local maxMessages = (account.settings and account.settings.maxMessagesPerConversation) or 200
+  PrefixMigration.MigratePrefix(account.conversations, "::BN::", "bnet", character, maxMessages)
+  PrefixMigration.MigratePrefix(account.conversations, "::WOW::", "wow", character, maxMessages)
+
+  return account, character
+end
+
+ns.SavedState = SavedState
+return SavedState

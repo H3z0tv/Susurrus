@@ -1,0 +1,141 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ChatReplyState = ns.ChatReplyState or (type(require) == "function" and require("Susurrus.Util.ChatReplyState")) or nil
+local LockdownReplay = ns.BootstrapLockdownReplay or require("Susurrus.Core.Bootstrap.LockdownReplay")
+local Localization = ns.Localization or (type(require) == "function" and require("Susurrus.Locale.Localization")) or nil
+local DisplayName = ns.DisplayName or require("Susurrus.Util.DisplayName")
+local function L(key)
+  return Localization and Localization.Text(key) or key
+end
+
+local MythicSuspendController = {}
+local DEFAULT_MYTHIC_PAUSE_NOTICE_KEY = "Messages are paused in Mythic content and will resume after you leave."
+
+function MythicSuspendController.Attach(runtime, deps)
+  deps = deps or {}
+
+  local Bootstrap = deps.Bootstrap or {}
+  local isWindowVisible = deps.isWindowVisible or function()
+    return false
+  end
+  local setWindowVisible = deps.setWindowVisible or function(...)
+    local _ = ...
+  end
+  local refreshWindow = deps.refreshWindow or function(...)
+    local _ = ...
+  end
+  local getNumChatWindows = deps.getNumChatWindows
+  local getEditBox = deps.getEditBox
+
+  runtime.suspend = function()
+    runtime.messagingNotice = deps.mythicPauseNotice or L(DEFAULT_MYTHIC_PAUSE_NOTICE_KEY)
+    Bootstrap._wasVisibleBeforeMythic = isWindowVisible()
+    setWindowVisible(false)
+    if Bootstrap.unregisterChatFilters then
+      Bootstrap.unregisterChatFilters()
+    end
+
+    -- Unregister live AND non-essential lifecycle events so our OnEvent
+    -- handler doesn't run at all during mythic content — any addon code
+    -- in the event dispatch taints Blizzard's chat frame context.
+    local EventBridge = deps.getEventBridge and deps.getEventBridge() or ns.BootstrapEventBridge
+    if EventBridge and Bootstrap._loadFrame then
+      EventBridge.UnregisterLiveEvents(Bootstrap._loadFrame)
+      EventBridge.UnregisterSuspendableLifecycleEvents(Bootstrap._loadFrame)
+    end
+
+    local seenLevelEvents = runtime.seenLevelEvents
+    if seenLevelEvents and seenLevelEvents.SetEnabled then
+      seenLevelEvents.SetEnabled(false)
+    end
+
+    -- Signal hooksecurefunc hooks (LinkHooks) to bail with zero addon code.
+    _G._wmSuspended = true
+
+    -- Release our R-key override so Blizzard's default /r takes over in M+.
+    -- Our messenger composer is disabled here anyway, so R on our button
+    -- would accomplish nothing.
+    if runtime.syncReplyKey then
+      runtime.syncReplyKey()
+    end
+
+    -- No chat print: printing to the game's chat taints its line fading.
+    -- The window notice and the icon say messages are paused.
+  end
+
+  runtime.resume = function()
+    runtime.messagingNotice = nil
+    _G._wmSuspended = nil
+
+    local seenLevelEvents = runtime.seenLevelEvents
+    if seenLevelEvents and seenLevelEvents.SetEnabled then
+      seenLevelEvents.SetEnabled(DisplayName.ShowPlayerLevels())
+    end
+
+    -- Clear our own stale reply key. We did NOT receive whispers during M+
+    -- (LIVE_EVENTS were unregistered), so any value here is pre-M+ and not
+    -- a valid reply target after resume.
+    --
+    -- IMPORTANT: do NOT call ChatEdit_SetLastTellTarget from here (even via
+    -- securecall). Writing literal arguments from our stack still attributes
+    -- caller taint to the upvalue slots inside Blizzard's chatEditLastTell,
+    -- which then propagates taint into MessageEventHandler on the NEXT
+    -- incoming whisper. Blizzard's tainted lastTell state after receiving
+    -- whispers during M+ can only be cleared by /reload — document, don't
+    -- scrub.
+    runtime.lastIncomingWhisperKey = nil
+
+    -- If Blizzard handled a whisper while we were suspended, its default chat
+    -- edit box may still hold the latest reply target. Capture it into our own
+    -- taint-safe reply state before scrubbing Blizzard's sticky attributes.
+    local staleReplyResolved = true
+    if ChatReplyState and ChatReplyState.CaptureStaleWhisperReplyTarget then
+      local _, resolved = ChatReplyState.CaptureStaleWhisperReplyTarget(runtime, getNumChatWindows, getEditBox)
+      staleReplyResolved = resolved ~= false
+    end
+
+    -- Scrub Blizzard's stale whisper sticky state on the default chat edit
+    -- box. If the user replied via /r or R-key during M+ (Blizzard handled
+    -- the whisper because we were suspended), chatType=WHISPER and
+    -- tellTarget remain set. On the next Enter our auto-open poller would
+    -- intercept that focused edit box and re-open the messenger to that
+    -- conversation — even though the user has not asked for it.
+    if staleReplyResolved and ChatReplyState and ChatReplyState.ClearStaleWhisperReplyState then
+      ChatReplyState.ClearStaleWhisperReplyState(getNumChatWindows, getEditBox)
+    end
+
+    local EventBridge = deps.getEventBridge and deps.getEventBridge() or ns.BootstrapEventBridge
+    if EventBridge and Bootstrap._loadFrame then
+      EventBridge.RegisterLiveEvents(Bootstrap._loadFrame)
+      EventBridge.RegisterSuspendableLifecycleEvents(Bootstrap._loadFrame)
+    end
+
+    if Bootstrap.syncChatFilters then
+      Bootstrap.syncChatFilters()
+    elseif Bootstrap.registerChatFilters then
+      Bootstrap.registerChatFilters()
+    end
+
+    -- Re-bind R → /wr now that we are out of M+ (if hide-whispers is on).
+    if runtime.syncReplyKey then
+      runtime.syncReplyKey()
+    end
+    if
+      Bootstrap._wasVisibleBeforeMythic
+      and not (runtime.accountState and runtime.accountState.settings and runtime.accountState.settings.hideOnCombat == true)
+    then
+      setWindowVisible(true)
+    end
+    refreshWindow()
+    Bootstrap._wasVisibleBeforeMythic = nil
+    LockdownReplay.Kick(runtime)
+  end
+
+  return runtime
+end
+
+ns.BootstrapMythicSuspendController = MythicSuspendController
+return MythicSuspendController

@@ -1,0 +1,309 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ContactEnricher = ns.ContactEnricher or require("Susurrus.Model.ContactEnricher")
+local WhisperGateway = ns.WhisperGateway or require("Susurrus.Transport.WhisperGateway")
+local BadgeFilter = ns.ToggleIconBadgeFilter or require("Susurrus.UI.ToggleIcon.BadgeFilter")
+local Store = ns.ConversationStore or require("Susurrus.Model.ConversationStore")
+-- stylua: ignore start
+local ChatCover = ns.BootstrapWindowCoordinatorChatCover or require("Susurrus.Core.Bootstrap.WindowCoordinator.ChatCover")
+local IconSurfaces = ns.BootstrapWindowCoordinatorIconSurfaces or require("Susurrus.Core.Bootstrap.WindowCoordinator.IconSurfaces")
+local RequestFollow = ns.BootstrapWindowCoordinatorRequestFollow or require("Susurrus.Core.Bootstrap.WindowCoordinator.RequestFollow")
+local IncomingRefresh = ns.BootstrapWindowCoordinatorIncomingRefresh or require("Susurrus.Core.Bootstrap.WindowCoordinator.IncomingRefresh")
+-- stylua: ignore end
+
+local STATUS_REFRESH_INTERVAL = 30
+local AVAILABILITY_THROTTLE_SECONDS = 10
+local AVAILABILITY_REFRESH_DEBOUNCE = 0.15
+
+local WindowCoordinator = {}
+
+function WindowCoordinator.Create(options)
+  options = options or {}
+
+  local runtime = options.runtime or {}
+  local buildContacts = options.buildContacts or function(_dirtyKeys)
+    return {}
+  end
+  local getWindow = options.getWindow or function()
+    return nil
+  end
+  local getIcon = options.getIcon or function()
+    return nil
+  end
+  local getMinimapIcon = options.getMinimapIcon or function()
+    return nil
+  end
+  local getLdbObject = options.getLdbObject or function()
+    return nil
+  end
+  local buildMessagePreview = options.buildMessagePreview or function()
+    return nil
+  end
+  local isMythicRestricted = options.isMythicRestricted or function()
+    return false
+  end
+  local presenceCache = options.presenceCache
+  local livePresenceSender = options.livePresenceSender
+  local requestAvailability = options.requestAvailability or WhisperGateway.RequestAvailability
+  local cTimer = options.cTimer or _G.C_Timer
+  local selectConversation = options.selectConversation
+  local externalPreview = options.externalPreview
+
+  local statusTicker = nil
+  local requestFollow = RequestFollow.Create(getWindow, selectConversation)
+
+  local coordinator = {}
+
+  function coordinator.isWindowVisible()
+    local window = getWindow()
+    if window == nil or window.frame == nil then
+      return false
+    end
+
+    if window.frame.IsShown then
+      return window.frame:IsShown()
+    end
+
+    return window.frame.shown == true
+  end
+
+  local function nowSeconds()
+    if type(runtime.now) == "function" then
+      return runtime.now() or 0
+    end
+    return 0
+  end
+
+  local function buildPresentGUIDs(contacts)
+    local presentGUIDs = {}
+    for _, item in ipairs(contacts) do
+      if item.guid then
+        presentGUIDs[item.guid] = true
+      end
+    end
+    return presentGUIDs
+  end
+
+  local function pruneGUIDCache(cache, presentGUIDs)
+    if type(cache) ~= "table" then
+      return
+    end
+    for guid in pairs(cache) do
+      if not presentGUIDs[guid] then
+        cache[guid] = nil
+      end
+    end
+  end
+
+  local function pruneAvailabilityCaches(contacts)
+    local presentGUIDs = buildPresentGUIDs(contacts)
+    pruneGUIDCache(runtime.availabilityByGUID, presentGUIDs)
+    pruneGUIDCache(runtime.availabilityRequestedAt, presentGUIDs)
+  end
+
+  -- Idle chats otherwise expire only on load or when a new message arrives.
+  -- ponytail: runs only while the window is open (show + status tick); a
+  -- hidden window catches up on the next open.
+  local function applyRetention()
+    local store = runtime.store
+    if type(store) ~= "table" or store.config == nil then
+      return false
+    end
+    local removed = Store.ApplyRetention(store, nowSeconds(), runtime.activeConversationKey)
+    return next(removed) ~= nil
+  end
+
+  local function startStatusTicker()
+    if statusTicker or cTimer == nil or type(cTimer.NewTicker) ~= "function" then
+      return
+    end
+    statusTicker = cTimer.NewTicker(STATUS_REFRESH_INTERVAL, function()
+      if not coordinator.isWindowVisible() then
+        return
+      end
+      if applyRetention() then
+        coordinator.refreshWindow()
+      else
+        coordinator.refreshContacts()
+      end
+    end)
+  end
+
+  local function stopStatusTicker()
+    if statusTicker == nil then
+      return
+    end
+    if type(statusTicker.Cancel) == "function" then
+      statusTicker:Cancel()
+    end
+    statusTicker = nil
+  end
+
+  function coordinator.setWindowVisible(nextVisible)
+    local window = getWindow()
+    if window == nil or window.frame == nil then
+      return
+    end
+
+    if nextVisible then
+      -- No full presence rebuild here: refreshWindow below runs
+      -- refreshContacts, which freshens presence for the visible contacts
+      -- only.
+      window.frame:Show()
+      applyRetention()
+      -- Re-render after Show so scroll frame dimensions are settled,
+      -- allowing snapToEnd to scroll to the latest message.
+      coordinator.refreshWindow()
+      startStatusTicker()
+      return
+    end
+
+    stopStatusTicker()
+    window.frame:Hide()
+  end
+
+  function coordinator.buildSelectionState(contacts)
+    return ContactEnricher.BuildWindowSelectionState(runtime, contacts, buildContacts)
+  end
+
+  local iconSurfaces = {
+    getWindow = getWindow,
+    isWindowVisible = coordinator.isWindowVisible,
+    buildMessagePreview = buildMessagePreview,
+    getIcon = getIcon,
+    getMinimapIcon = getMinimapIcon,
+    getLdbObject = getLdbObject,
+    -- The registry (set after Create), not the window: counts before it is built.
+    getPanelRegistry = function()
+      return runtime.panelRegistry
+    end,
+  }
+  if externalPreview then
+    iconSurfaces.getExternalPreview = externalPreview.get
+    iconSurfaces.previewsOff = function()
+      local settings = runtime.accountState and runtime.accountState.settings
+      return settings ~= nil and settings.showWidgetMessagePreview == false
+    end
+    iconSurfaces.dropExternalPreview = function()
+      externalPreview.clear()
+    end
+  end
+
+  function coordinator.updateIconSurfaces()
+    IconSurfaces.Update(buildContacts(), iconSurfaces)
+  end
+
+  -- dirtyKeys nil rebuilds every contact; a set rebuilds only those keys.
+  function coordinator.refreshContacts(dirtyKeys)
+    local freshContacts = buildContacts(dirtyKeys)
+    local previousRequestKeys = requestFollow.takeRequestKeys(freshContacts)
+    pruneAvailabilityCaches(freshContacts)
+
+    if not isMythicRestricted() then
+      runtime.availabilityRequestedAt = runtime.availabilityRequestedAt or {}
+      local now = nowSeconds()
+      local ensureFresh = presenceCache and type(presenceCache.EnsureFresh) == "function" and presenceCache.EnsureFresh or nil
+      for _, item in ipairs(freshContacts) do
+        if ensureFresh and item.guid then
+          ensureFresh(item.guid)
+        end
+        if item.channel == "WOW" and item.guid and ContactEnricher.ShouldRequestAvailability(runtime.availabilityByGUID[item.guid]) then
+          local lastAt = runtime.availabilityRequestedAt[item.guid] or 0
+          if now - lastAt >= AVAILABILITY_THROTTLE_SECONDS then
+            runtime.availabilityRequestedAt[item.guid] = now
+            requestAvailability(runtime.chatApi, item.guid)
+          end
+        end
+      end
+    end
+
+    local nextState, followed = requestFollow.reconcile(coordinator.buildSelectionState(freshContacts), previousRequestKeys)
+    if followed then
+      return nextState
+    end
+    IconSurfaces.Update(freshContacts, iconSurfaces)
+    return nextState
+  end
+  -- A hidden window keeps only the icon badges and preview current. Opening
+  -- it (setWindowVisible) runs the full refresh: availability, presence,
+  -- request follow and read receipts.
+  function coordinator.refreshWindow(affectedConversationKey, dirtyKeys)
+    if not coordinator.isWindowVisible() then
+      local contacts = buildContacts(dirtyKeys)
+      IconSurfaces.Update(contacts, iconSurfaces)
+      return { contacts = contacts }
+    end
+
+    local nextState = coordinator.refreshContacts(dirtyKeys)
+    local window = getWindow()
+
+    if coordinator.isWindowVisible() and window then
+      local selectedConversationKey = nextState.selectedContact and nextState.selectedContact.conversationKey or nil
+      if affectedConversationKey and selectedConversationKey and selectedConversationKey ~= affectedConversationKey and window.refreshContacts then
+        window.refreshContacts(nextState.contacts, selectedConversationKey)
+      elseif window.refreshSelection then
+        window.refreshSelection(nextState)
+      end
+      -- The selected conversation is on screen now (not under a panel or the
+      -- options pane), so its newest message counts as seen by the user.
+      if livePresenceSender and type(livePresenceSender.SyncReadReceipts) == "function" and not ChatCover.IsCovered(window) then
+        livePresenceSender.SyncReadReceipts(runtime, nextState.selectedContact)
+      end
+    end
+
+    return nextState
+  end
+
+  local function refreshAvailabilitySurfaces(changedGUIDs)
+    local nextState = coordinator.refreshContacts()
+    local window = getWindow()
+    if not coordinator.isWindowVisible() or window == nil then
+      return
+    end
+
+    local selectedContact = nextState.selectedContact
+    if selectedContact and selectedContact.guid and changedGUIDs[selectedContact.guid] and window.refreshSelection then
+      window.refreshSelection(nextState)
+    elseif window.refreshContacts then
+      window.refreshContacts(nextState.contacts, selectedContact and selectedContact.conversationKey or nil)
+    elseif window.refreshSelection then
+      window.refreshSelection(nextState)
+    end
+  end
+
+  -- Late-bound so a replaced coordinator method (tests, hooks) is honoured.
+  local function isWindowVisible()
+    return coordinator.isWindowVisible()
+  end
+  coordinator.scheduleAvailabilityRefresh =
+    IncomingRefresh.Debounce(cTimer, AVAILABILITY_REFRESH_DEBOUNCE, isWindowVisible, refreshAvailabilitySurfaces)
+  coordinator.scheduleIncomingRefresh = IncomingRefresh.Create({
+    cTimer = cTimer,
+    isWindowVisible = isWindowVisible,
+    refreshWindow = function(focusKey, dirtyKeys)
+      return coordinator.refreshWindow(focusKey, dirtyKeys)
+    end,
+    getSelectedKey = function()
+      return runtime.activeConversationKey
+    end,
+  }).schedule
+
+  -- accept(key), when given, limits the search (e.g. to the open tab).
+  function coordinator.findLatestUnreadKey(accept)
+    for _, item in ipairs(buildContacts()) do
+      if BadgeFilter.BadgeUnread(item) > 0 and (accept == nil or accept(item.conversationKey)) then
+        return item.conversationKey
+      end
+    end
+
+    return nil
+  end
+
+  return coordinator
+end
+
+ns.BootstrapWindowCoordinator = WindowCoordinator
+return WindowCoordinator

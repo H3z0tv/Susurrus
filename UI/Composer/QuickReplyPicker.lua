@@ -1,0 +1,145 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
+local PickerStyles = ns.PickerStyles or require("Susurrus.UI.Shared.PickerStyles")
+local Popover = ns.ComposerPopover or require("Susurrus.UI.Composer.Popover")
+local PickerPopup = ns.PickerPopup or require("Susurrus.UI.Shared.PickerPopup")
+local NativeArt = ns.UIHelpersNativeArt or require("Susurrus.UI.Helpers.NativeArt")
+local Hud = ns.Hud or require("Susurrus.UI.Theme.Hud")
+
+-- List of quick replies above the composer; clicking one hands its text to
+-- onSelect. Rebuilt on every open so settings edits show up immediately.
+local QuickReplyPicker = {}
+
+local ROW_WIDTH = 260
+local ROW_HEIGHT = PickerStyles.ROW_HEIGHT
+local PADDING = 6
+local LABEL_INSET = 8
+
+-- Dropdown-menu entry look for the Native WoW HUD. Returns the label.
+local function addNativeArt(row)
+  row._highlight = NativeArt.AddHighlight(row, NativeArt.LIST_HOVER)
+  local label = row:CreateFontString(nil, "OVERLAY")
+  UIHelpers.setFontObject(label, PickerPopup.MENU_FONT)
+  return label
+end
+
+-- Themed flat hover and label. Returns the label.
+local function addModernArt(row, picker)
+  local highlight = PickerPopup.CreateHoverFill(row)
+  row._highlight = highlight
+
+  local label = row:CreateFontString(nil, "OVERLAY", Theme.FONTS.icon_label)
+  UIHelpers.setTextColor(label, Theme.COLORS.text_primary)
+
+  row:SetScript("OnEnter", function()
+    if picker.enabled then
+      highlight:Show()
+    end
+  end)
+  row:SetScript("OnLeave", function()
+    highlight:Hide()
+  end)
+  return label
+end
+
+local function createRow(factory, frame, picker, onSelect)
+  local row = factory.CreateFrame("Button", nil, frame)
+  row:SetSize(ROW_WIDTH, ROW_HEIGHT)
+
+  local label = picker.native and addNativeArt(row) or addModernArt(row, picker)
+  label:SetPoint("LEFT", row, "LEFT", LABEL_INSET, 0)
+  label:SetWidth(ROW_WIDTH - LABEL_INSET * 2)
+  label:SetJustifyH("LEFT")
+  label:SetWordWrap(false)
+  row.label = label
+
+  row:SetScript("OnClick", function()
+    if not picker.enabled or row.replyText == nil then
+      return
+    end
+    picker:close()
+    onSelect(row.replyText)
+  end)
+  return row
+end
+
+function QuickReplyPicker.Create(factory, parent, anchorFrame, getReplies, onSelect)
+  local popover = Popover.Create(factory, parent, anchorFrame)
+  local frame = popover.frame
+  -- Rows match the panel, which follows the HUD style at creation.
+  local picker = { frame = frame, rows = {}, enabled = true, native = Hud.IsOn() }
+  -- A tooltip-border (HUD) panel shifts its rows clear of the border.
+  local padding = PADDING + PickerPopup.BorderInset(frame)
+
+  -- Returns the number of replies listed.
+  local function rebuild()
+    local replies = getReplies() or {}
+    for index, text in ipairs(replies) do
+      local row = picker.rows[index]
+      if row == nil then
+        row = createRow(factory, frame, picker, onSelect)
+        row:SetPoint("TOPLEFT", frame, "TOPLEFT", padding, -padding - (index - 1) * ROW_HEIGHT)
+        picker.rows[index] = row
+      end
+      row.replyText = text
+      row.label:SetText(text)
+      row:Show()
+    end
+    for index = #replies + 1, #picker.rows do
+      picker.rows[index].replyText = nil
+      picker.rows[index]:Hide()
+    end
+    frame:SetSize(ROW_WIDTH + padding * 2, #replies * ROW_HEIGHT + padding * 2)
+    return #replies
+  end
+
+  -- Nothing to list -> stays closed.
+  function picker:open()
+    if not self.enabled or rebuild() == 0 then
+      return false
+    end
+    popover.open()
+    return true
+  end
+
+  function picker:close()
+    popover.close()
+  end
+
+  function picker:toggle()
+    if frame:IsShown() then
+      popover.close()
+      return false
+    end
+    return self:open()
+  end
+
+  function picker:setEnabled(enabled)
+    self.enabled = enabled == true
+    if not self.enabled then
+      popover.close()
+    end
+  end
+
+  function picker:refreshTheme()
+    popover.refreshTheme()
+    if self.native then
+      return
+    end
+    local highlightColor = PickerStyles.HighlightColor(PickerStyles.HOVER_ALPHA)
+    for _, row in ipairs(self.rows) do
+      PickerStyles.ApplyColor(row._highlight, highlightColor)
+      UIHelpers.setTextColor(row.label, Theme.COLORS.text_primary)
+    end
+  end
+
+  return picker
+end
+
+ns.ComposerQuickReplyPicker = QuickReplyPicker
+return QuickReplyPicker

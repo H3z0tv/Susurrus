@@ -1,0 +1,289 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local Base = ns.UIHelpersBase or require("Susurrus.UI.Helpers.Base")
+local GhostButton = ns.UIHelpersGhostButton or require("Susurrus.UI.Helpers.GhostButton")
+local NavItem = ns.UIHelpersNavItem or require("Susurrus.UI.Helpers.NavItem")
+local ToggleSwitch = ns.UIHelpersToggleSwitch or require("Susurrus.UI.Helpers.ToggleSwitch")
+local NativeControls = ns.UIHelpersNativeControls or require("Susurrus.UI.Helpers.NativeControls")
+local Hud = ns.Hud or require("Susurrus.UI.Theme.Hud")
+
+local Controls = {}
+
+-- Space between a toggle's label and its switch or checkbox.
+local TOGGLE_LABEL_GAP = 8
+
+function Controls.createOptionButton(factory, parent, label, colors, layout)
+  local btnHeight = layout.height or Theme.LAYOUT.OPTION_BUTTON_HEIGHT
+  local btnWidth = layout.width or 200
+
+  -- Native WoW HUD: action buttons (ghost and danger too) are Blizzard panel
+  -- buttons; nav items stay list items.
+  local native = Hud.IsOn() and not layout.nav and NativeControls.CreateButton(factory, parent, label, btnWidth, btnHeight)
+  if native then
+    return native
+  end
+
+  local button = factory.CreateFrame("Button", nil, parent)
+  button:SetSize(btnWidth, btnHeight)
+
+  local bg = button:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints(button)
+
+  local labelFs = button:CreateFontString(nil, "OVERLAY", Theme.FONTS.icon_label)
+  labelFs:SetPoint("CENTER", button, "CENTER", 0, 0)
+  labelFs:SetText(label)
+
+  button._wmHovered = false
+  button._wmColors = {
+    bg = colors.bg,
+    bgHover = colors.bgHover or colors.bg,
+    text = colors.text,
+    textHover = colors.textHover or colors.text,
+  }
+
+  -- `layout.ghost` opts a button into the outline look (`layout.danger`
+  -- makes it the red destructive variant).
+  local ghost = layout.ghost and GhostButton.Attach(button, { danger = layout.danger }) or nil
+  button.ghost = ghost
+  -- `layout.nav` opts a button into the settings-nav list-item look.
+  local nav = layout.nav and NavItem.Attach(button, layout.icon) or nil
+  button.nav = nav
+  button._wmNavActive = false
+
+  if nav and nav.icon then
+    labelFs:ClearAllPoints()
+    labelFs:SetPoint("LEFT", nav.icon, "RIGHT", NavItem.ICON_GAP, 0)
+  elseif nav then
+    labelFs:ClearAllPoints()
+    labelFs:SetPoint("LEFT", button, "LEFT", NavItem.PADDING_X, 0)
+  end
+
+  local function applyNavState(hovered)
+    if not nav then
+      return false
+    end
+    Base.applyColorTexture(bg, Base.TRANSPARENT)
+    NavItem.Paint(nav, labelFs, button._wmNavActive, hovered)
+    return true
+  end
+
+  local function applyGhostState(hovered)
+    if not ghost then
+      return false
+    end
+    Base.applyColorTexture(bg, Base.TRANSPARENT)
+    GhostButton.Paint(ghost, labelFs, hovered)
+    return true
+  end
+
+  local function applyBaseState()
+    if applyNavState(false) or applyGhostState(false) then
+      return
+    end
+    local palette = button._wmColors
+    Base.applyColorTexture(bg, palette.bg)
+    Base.setTextColor(labelFs, palette.text)
+  end
+
+  local function applyHoverState()
+    if applyNavState(true) or applyGhostState(true) then
+      return
+    end
+    local palette = button._wmColors
+    Base.applyColorTexture(bg, palette.bgHover or palette.bg)
+    Base.setTextColor(labelFs, palette.textHover or palette.text)
+  end
+
+  local function repaint()
+    if button._wmHovered then
+      applyHoverState()
+    else
+      applyBaseState()
+    end
+  end
+
+  button.setNavActive = function(active)
+    button._wmNavActive = active == true
+    repaint()
+  end
+
+  button.applyThemeColors = function(nextColors)
+    if type(nextColors) == "table" then
+      if nextColors.bg ~= nil then
+        button._wmColors.bg = nextColors.bg
+      end
+      if nextColors.bgHover ~= nil then
+        button._wmColors.bgHover = nextColors.bgHover
+      end
+      if nextColors.text ~= nil then
+        button._wmColors.text = nextColors.text
+      end
+      if nextColors.textHover ~= nil then
+        button._wmColors.textHover = nextColors.textHover
+      end
+    end
+    repaint()
+  end
+
+  button:SetScript("OnEnter", function()
+    button._wmHovered = true
+    applyHoverState()
+  end)
+
+  button:SetScript("OnLeave", function()
+    button._wmHovered = false
+    applyBaseState()
+  end)
+
+  applyBaseState()
+  button.bg = bg
+  button.label = labelFs
+
+  button.setWidth = function(nextWidth)
+    if type(nextWidth) ~= "number" or nextWidth <= 0 then
+      return
+    end
+    button:SetSize(nextWidth, btnHeight)
+  end
+
+  return button
+end
+
+function Controls.createToggleRow(factory, parent, label, initial, colors, layout, onChange, tooltip)
+  local toggleWidth = layout.width or 280
+  local toggleHeight = layout.height or 24
+
+  local row = factory.CreateFrame("Frame", nil, parent)
+  row:SetSize(toggleWidth, toggleHeight)
+
+  local labelFs = row:CreateFontString(nil, "OVERLAY", Theme.FONTS.icon_label)
+  labelFs:SetPoint("LEFT", row, "LEFT", 0, 0)
+  if labelFs.SetJustifyH then
+    labelFs:SetJustifyH("LEFT")
+  end
+  if labelFs.SetWordWrap then
+    labelFs:SetWordWrap(true)
+  end
+  if labelFs.SetNonSpaceWrap then
+    labelFs:SetNonSpaceWrap(true)
+  end
+  labelFs:SetText(label)
+
+  -- Native WoW HUD: Blizzard checkbox in place of the switch.
+  local check = Hud.IsOn() and NativeControls.CreateCheckButton(factory, row) or nil
+  local dot = check or factory.CreateFrame("Button", nil, row)
+  if not check then
+    dot:SetSize(ToggleSwitch.TRACK_WIDTH, ToggleSwitch.TRACK_HEIGHT)
+  end
+  dot:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+
+  row._wmColors = {
+    text = colors.text,
+    on = colors.on or Theme.COLORS.option_toggle_on or Theme.COLORS.online or { 0.30, 0.82, 0.40, 1.0 },
+    off = colors.off or Theme.COLORS.option_toggle_off or Theme.COLORS.offline or { 0.45, 0.45, 0.50, 1.0 },
+    knob = colors.knob or Theme.COLORS.control_knob,
+  }
+
+  local switch = not check and ToggleSwitch.Attach(dot) or nil
+
+  -- Long labels wrap short of the control and the row grows to fit them.
+  local rowWidth = toggleWidth
+  local controlWidth = check and NativeControls.CHECK_SIZE or ToggleSwitch.TRACK_WIDTH
+  local function fitLabel()
+    labelFs:SetWidth(math.max(1, rowWidth - controlWidth - TOGGLE_LABEL_GAP))
+    local labelHeight = labelFs.GetStringHeight and labelFs:GetStringHeight() or 0
+    row:SetSize(rowWidth, math.max(toggleHeight, math.ceil(labelHeight)))
+  end
+  -- Pages relabel through `.label:SetText` on a language change.
+  local setLabelText = labelFs.SetText
+  labelFs.SetText = function(self, value)
+    setLabelText(self, value)
+    fitLabel()
+  end
+  fitLabel()
+
+  local enabled = initial == true
+  local function updateVisual()
+    Base.setTextColor(labelFs, row._wmColors.text)
+    if check then
+      check:SetChecked(enabled)
+    else
+      ToggleSwitch.Paint(switch, dot, enabled, row._wmColors)
+    end
+  end
+  updateVisual()
+
+  dot:SetScript("OnClick", function()
+    enabled = not enabled
+    updateVisual()
+    if onChange then
+      onChange(enabled)
+    end
+  end)
+
+  if tooltip and row.SetScript then
+    local lines = type(tooltip) == "table" and tooltip or { tooltip }
+    row:SetScript("OnEnter", function()
+      if _G.GameTooltip and _G.GameTooltip.SetOwner then
+        _G.GameTooltip:SetOwner(row, "ANCHOR_TOP")
+        _G.GameTooltip:SetText(lines[1])
+        for i = 2, #lines do
+          if _G.GameTooltip.AddLine then
+            pcall(_G.GameTooltip.AddLine, _G.GameTooltip, lines[i], 1, 1, 1)
+          end
+        end
+        _G.GameTooltip:Show()
+      end
+    end)
+    row:SetScript("OnLeave", function()
+      if _G.GameTooltip and _G.GameTooltip.Hide then
+        _G.GameTooltip:Hide()
+      end
+    end)
+  end
+
+  return {
+    row = row,
+    label = labelFs,
+    dot = dot,
+    switch = switch,
+    setValue = function(val)
+      enabled = val == true
+      updateVisual()
+    end,
+    setWidth = function(nextWidth)
+      if type(nextWidth) ~= "number" or nextWidth <= 0 then
+        return
+      end
+      rowWidth = nextWidth
+      fitLabel()
+    end,
+    applyThemeColors = function(nextColors)
+      if type(nextColors) == "table" then
+        if nextColors.text ~= nil then
+          row._wmColors.text = nextColors.text
+        end
+        if nextColors.on ~= nil then
+          row._wmColors.on = nextColors.on
+        end
+        if nextColors.off ~= nil then
+          row._wmColors.off = nextColors.off
+        end
+        if nextColors.knob ~= nil then
+          row._wmColors.knob = nextColors.knob
+        end
+      end
+      updateVisual()
+      -- Font size changes repaint through here.
+      fitLabel()
+    end,
+  }
+end
+
+ns.UIHelpersControls = Controls
+
+return Controls

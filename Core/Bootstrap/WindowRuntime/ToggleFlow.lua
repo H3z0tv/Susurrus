@@ -1,0 +1,83 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ContactsTabFilter = ns.ContactsTabFilter or require("Susurrus.UI.ContactsList.ContactsTabFilter")
+local ConversationSnapshot = ns.ConversationSnapshot or require("Susurrus.Model.ConversationSnapshot")
+local Store = ns.ConversationStore or require("Susurrus.Model.ConversationStore")
+
+local ToggleFlow = {}
+
+-- Classified exactly like the contacts list: the conversation's snapshot
+-- through ContactsTabFilter.ModeOf.
+local function conversationMatchesTab(runtime, conversationKey, tabMode)
+  if tabMode == nil then
+    return true
+  end
+
+  local conversation = Store.Find(runtime.store, conversationKey)
+  if conversation == nil then
+    return true
+  end
+
+  local settings = runtime.accountState and runtime.accountState.settings
+  return ContactsTabFilter.ModeOf(ConversationSnapshot.Build(conversationKey, conversation, settings)) == tabMode
+end
+
+function ToggleFlow.Create(options)
+  options = options or {}
+
+  local runtime = options.runtime or {}
+  local ensureWindow = options.ensureWindow or function() end
+  local isWindowVisible = options.isWindowVisible or function()
+    return false
+  end
+  local setWindowVisible = options.setWindowVisible or function() end
+  local getWindow = options.getWindow or function()
+    return nil
+  end
+  local findLatestUnreadKey = options.findLatestUnreadKey or function(_accept)
+    return nil
+  end
+  local selectConversation = options.selectConversation or function() end
+  local refreshWindow = options.refreshWindow or function() end
+
+  local function matchesTab(conversationKey, tabMode)
+    return conversationMatchesTab(runtime, conversationKey, tabMode)
+  end
+
+  local function toggle()
+    ensureWindow()
+    local nextVisible = not isWindowVisible()
+    setWindowVisible(nextVisible)
+
+    if nextVisible then
+      local window = getWindow()
+      local tabMode = window and type(window.getTabMode) == "function" and window.getTabMode() or nil
+      -- Jump to the latest unread chat on the open tab: on the Groups tab a
+      -- fresh whisper must not steal the selection, and on the Whispers tab
+      -- an unread party message must not either.
+      local unreadKey = findLatestUnreadKey(function(conversationKey)
+        return matchesTab(conversationKey, tabMode)
+      end)
+
+      local targetKey = unreadKey or runtime.activeConversationKey
+      if targetKey ~= nil and matchesTab(targetKey, tabMode) then
+        selectConversation(targetKey)
+        return
+      end
+    end
+
+    refreshWindow()
+  end
+
+  return {
+    toggle = toggle,
+    conversationMatchesTab = matchesTab,
+  }
+end
+
+ns.BootstrapWindowRuntimeToggleFlow = ToggleFlow
+
+return ToggleFlow

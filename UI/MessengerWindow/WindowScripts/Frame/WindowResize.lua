@@ -1,0 +1,228 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local WindowResize = {}
+
+local function effectiveScaleOrOne(target)
+  if target and type(target.GetEffectiveScale) == "function" then
+    local scale = target:GetEffectiveScale()
+    if type(scale) == "number" and scale == scale and scale > 0 and scale < math.huge then
+      return scale
+    end
+  end
+  return 1
+end
+
+function WindowResize.New(options)
+  local frame = options.frame
+  local resizeGrip = options.resizeGrip
+  local frameTheme = options.frameTheme
+
+  local resizing = false
+  local pendingWidth = nil
+  local pendingHeight = nil
+  local preResizeAlpha = nil
+
+  local windowResizePreviewHost = options.getFrameParent() or frame
+  local windowResizePreview = nil
+  if windowResizePreviewHost and windowResizePreviewHost.CreateTexture then
+    local dividerColor = frameTheme.COLORS and frameTheme.COLORS.divider or { 0.20, 0.22, 0.28, 1 }
+    local fillColor = frameTheme.COLORS and frameTheme.COLORS.bg_secondary or { 0.10, 0.10, 0.14, 1 }
+
+    windowResizePreview = {
+      bg = windowResizePreviewHost:CreateTexture(nil, "OVERLAY"),
+      top = windowResizePreviewHost:CreateTexture(nil, "OVERLAY"),
+      bottom = windowResizePreviewHost:CreateTexture(nil, "OVERLAY"),
+      left = windowResizePreviewHost:CreateTexture(nil, "OVERLAY"),
+      right = windowResizePreviewHost:CreateTexture(nil, "OVERLAY"),
+    }
+
+    windowResizePreview.bg:SetColorTexture(fillColor[1], fillColor[2], fillColor[3], options.previewFillAlpha)
+    windowResizePreview.top:SetColorTexture(dividerColor[1], dividerColor[2], dividerColor[3], options.previewBorderAlpha)
+    windowResizePreview.bottom:SetColorTexture(dividerColor[1], dividerColor[2], dividerColor[3], options.previewBorderAlpha)
+    windowResizePreview.left:SetColorTexture(dividerColor[1], dividerColor[2], dividerColor[3], options.previewBorderAlpha)
+    windowResizePreview.right:SetColorTexture(dividerColor[1], dividerColor[2], dividerColor[3], options.previewBorderAlpha)
+
+    if resizeGrip then
+      resizeGrip.preview = windowResizePreview
+    end
+    for _, texture in pairs(windowResizePreview) do
+      if texture.Hide then
+        texture:Hide()
+      end
+    end
+  end
+
+  local function setPreviewShown(isShown)
+    if not windowResizePreview then
+      return
+    end
+
+    for _, texture in pairs(windowResizePreview) do
+      if isShown then
+        if texture.Show then
+          texture:Show()
+        end
+      elseif texture.Hide then
+        texture:Hide()
+      end
+    end
+  end
+
+  local function updatePreview(width, height)
+    if not windowResizePreview then
+      return
+    end
+
+    local frameLeft = options.getFrameLeft()
+    local frameTop = options.getFrameTop()
+    if type(frameLeft) ~= "number" or type(frameTop) ~= "number" then
+      return
+    end
+
+    local scaleRatio = effectiveScaleOrOne(frame) / effectiveScaleOrOne(windowResizePreviewHost)
+    local hostLeft = 0
+    local hostBottom = 0
+    if type(windowResizePreviewHost.GetLeft) == "function" then
+      local left = windowResizePreviewHost:GetLeft()
+      if type(left) == "number" then
+        hostLeft = left
+      end
+    end
+    if type(windowResizePreviewHost.GetBottom) == "function" then
+      local bottom = windowResizePreviewHost:GetBottom()
+      if type(bottom) == "number" then
+        hostBottom = bottom
+      end
+    end
+
+    local previewLeft = frameLeft * scaleRatio - hostLeft
+    local previewTop = frameTop * scaleRatio - hostBottom
+    local previewWidth = math.max(1, width or options.frameWidth()) * scaleRatio
+    local previewHeight = math.max(1, height or options.frameHeight()) * scaleRatio
+    local dividerThickness = ((frameTheme.LAYOUT and frameTheme.LAYOUT.DIVIDER_THICKNESS) or frameTheme.DIVIDER_THICKNESS) * scaleRatio
+
+    if windowResizePreview.bg.ClearAllPoints then
+      windowResizePreview.bg:ClearAllPoints()
+    end
+    windowResizePreview.bg:SetPoint("TOPLEFT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft, previewTop)
+    windowResizePreview.bg:SetSize(previewWidth, previewHeight)
+
+    if windowResizePreview.top.ClearAllPoints then
+      windowResizePreview.top:ClearAllPoints()
+    end
+    windowResizePreview.top:SetPoint("TOPLEFT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft, previewTop)
+    windowResizePreview.top:SetPoint("TOPRIGHT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft + previewWidth, previewTop)
+    windowResizePreview.top:SetHeight(dividerThickness)
+
+    if windowResizePreview.bottom.ClearAllPoints then
+      windowResizePreview.bottom:ClearAllPoints()
+    end
+    windowResizePreview.bottom:SetPoint("BOTTOMLEFT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft, previewTop - previewHeight)
+    windowResizePreview.bottom:SetPoint("BOTTOMRIGHT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft + previewWidth, previewTop - previewHeight)
+    windowResizePreview.bottom:SetHeight(dividerThickness)
+
+    if windowResizePreview.left.ClearAllPoints then
+      windowResizePreview.left:ClearAllPoints()
+    end
+    windowResizePreview.left:SetPoint("TOPLEFT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft, previewTop)
+    windowResizePreview.left:SetPoint("BOTTOMLEFT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft, previewTop - previewHeight)
+    windowResizePreview.left:SetWidth(dividerThickness)
+
+    if windowResizePreview.right.ClearAllPoints then
+      windowResizePreview.right:ClearAllPoints()
+    end
+    windowResizePreview.right:SetPoint("TOPRIGHT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft + previewWidth, previewTop)
+    windowResizePreview.right:SetPoint("BOTTOMRIGHT", windowResizePreviewHost, "BOTTOMLEFT", previewLeft + previewWidth, previewTop - previewHeight)
+    windowResizePreview.right:SetWidth(dividerThickness)
+
+    setPreviewShown(true)
+  end
+
+  local function updateFromCursor()
+    if not resizing then
+      return
+    end
+
+    local cursorX = options.getCursorX()
+    local cursorY = options.getCursorY()
+    local frameLeft = options.getFrameLeft()
+    local frameTop = options.getFrameTop()
+    if type(cursorX) ~= "number" or type(cursorY) ~= "number" or type(frameLeft) ~= "number" or type(frameTop) ~= "number" then
+      return
+    end
+
+    local nextWidth, nextHeight = options.clampWindowSize(cursorX - frameLeft, frameTop - cursorY)
+    pendingWidth = nextWidth
+    pendingHeight = nextHeight
+    updatePreview(nextWidth, nextHeight)
+  end
+
+  local function stop(button)
+    if button ~= "LeftButton" or not resizing then
+      return
+    end
+
+    resizing = false
+    setPreviewShown(false)
+    if frame and frame.SetAlpha then
+      frame:SetAlpha(preResizeAlpha or 1)
+      preResizeAlpha = nil
+    end
+
+    local nextWidth, nextHeight = options.clampWindowSize(pendingWidth or options.frameWidth(), pendingHeight or options.frameHeight())
+    pendingWidth = nil
+    pendingHeight = nil
+
+    options.applyCommittedSize(nextWidth, nextHeight)
+
+    local nextState = options.buildState(frame)
+    if options.onPositionChanged then
+      options.onPositionChanged(nextState)
+    end
+  end
+
+  local function start(button)
+    if button ~= "LeftButton" then
+      return
+    end
+
+    resizing = true
+    pendingWidth, pendingHeight = options.clampWindowSize(options.frameWidth(), options.frameHeight())
+    if frame and frame.GetAlpha then
+      preResizeAlpha = frame:GetAlpha()
+    else
+      preResizeAlpha = 1
+    end
+    if frame and frame.SetAlpha then
+      frame:SetAlpha(options.dragFrameAlpha)
+    end
+
+    updateFromCursor()
+    updatePreview(pendingWidth, pendingHeight)
+  end
+
+  local function reset()
+    resizing = false
+    pendingWidth = nil
+    pendingHeight = nil
+    preResizeAlpha = nil
+    setPreviewShown(false)
+  end
+
+  return {
+    start = start,
+    stop = stop,
+    updateFromCursor = updateFromCursor,
+    reset = reset,
+    isResizing = function()
+      return resizing
+    end,
+  }
+end
+
+ns.MessengerWindowWindowScriptsFrameWindowResize = WindowResize
+
+return WindowResize

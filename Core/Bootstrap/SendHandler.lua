@@ -1,0 +1,293 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Availability = ns.Availability or require("Susurrus.Transport.Availability")
+local Router = ns.EventRouter or require("Susurrus.Core.EventRouter")
+local Gateway = ns.WhisperGateway or require("Susurrus.Transport.WhisperGateway")
+local Store = ns.ConversationStore or require("Susurrus.Model.ConversationStore")
+local FlavorCompat = ns.FlavorCompat or require("Susurrus.Core.FlavorCompat")
+local QuestLinkClassic = ns.UIHyperlinksQuestLinkClassic or require("Susurrus.UI.Hyperlinks.QuestLinkClassic")
+local AddonComm = ns.AddonComm or require("Susurrus.Transport.AddonComm")
+local QuestLinkExchange = ns.QuestLinkExchange or require("Susurrus.Model.QuestLinkExchange")
+local MessageReactionProtocol = ns.MessageReactionProtocol or require("Susurrus.Model.MessageReactionProtocol")
+local BNetResolver = ns.BNetResolver or require("Susurrus.Transport.BNetResolver")
+local OutgoingDelivery = ns.OutgoingDelivery or require("Susurrus.Model.OutgoingDelivery")
+local MessageReplies = ns.MessageReplies or require("Susurrus.Model.MessageReplies")
+local LivePresence = ns.LivePresence or require("Susurrus.Model.LivePresence")
+local SendParts = ns.BootstrapSendParts or require("Susurrus.Core.Bootstrap.SendParts")
+
+local QUEST_LINK_ADDON_PREFIX = AddonComm.PREFIX_QUEST_LINK
+local REACTION_ADDON_PREFIX = AddonComm.PREFIX_REACTION
+
+local SendHandler = {}
+
+-- Keeps an unsent message in history: "queued" (lockdown; Send now later)
+-- or "failed" (the game rejected it). Flags the payload so the composer can
+-- clear: the text is not lost. A reaction is not a typed message, so an
+-- unsent one leaves nothing behind.
+local function appendUnsentOutgoing(runtime, payload, delivery, reason)
+  if runtime == nil or runtime.store == nil or payload == nil or payload.conversationKey == nil or payload.reactionControl ~= nil then
+    return
+  end
+
+  local now = runtime.now and runtime.now() or 0
+  payload.deliveryRecorded = true
+  Store.AppendOutgoing(runtime.store, payload.conversationKey, OutgoingDelivery.BuildRecord(payload, now, delivery, reason))
+end
+
+-- The lock that keeps a whisper from going out now, as its status reason.
+local function lockReason(runtime)
+  if runtime.isMythicLockdown and runtime.isMythicLockdown() then
+    return "Mythic Lockdown"
+  end
+  if runtime.isCompetitiveContent and runtime.isCompetitiveContent() then
+    return "Competitive Content"
+  end
+  return nil
+end
+
+local function isBattleTag(value)
+  return type(value) == "string" and string.match(value, "^[^#]+#%d+$") ~= nil
+end
+
+local function resolveBattleNetRecipient(runtime, payload)
+  local conversations = runtime.store and runtime.store.conversations
+  local conversation = conversations and conversations[payload.conversationKey]
+  local storedBattleTag = conversation and conversation.battleTag
+  local payloadBattleTag = payload.battleTag
+  if storedBattleTag ~= nil and payloadBattleTag ~= nil and storedBattleTag ~= payloadBattleTag then
+    return nil
+  end
+
+  local expectedBattleTag = storedBattleTag or payloadBattleTag
+  if expectedBattleTag == nil and isBattleTag(payload.displayName) then
+    expectedBattleTag = payload.displayName
+  end
+
+  local oldBnetAccountID = payload.bnetAccountID or (conversation and conversation.bnetAccountID)
+  local guid = payload.guid or (conversation and conversation.guid)
+  local accountInfo
+  if expectedBattleTag and oldBnetAccountID ~= nil and type(BNetResolver.ResolveAccountInfo) == "function" then
+    accountInfo = BNetResolver.ResolveAccountInfo(runtime.bnetApi, oldBnetAccountID, guid, expectedBattleTag)
+  end
+
+  local resolvedBnetAccountID = accountInfo and BNetResolver.SanitizeAccountID(accountInfo.bnetAccountID)
+  if accountInfo == nil or accountInfo.battleTag ~= expectedBattleTag or type(resolvedBnetAccountID) ~= "number" then
+    if expectedBattleTag and type(BNetResolver.ResolveFriendByBattleTag) == "function" then
+      accountInfo = BNetResolver.ResolveFriendByBattleTag(runtime.bnetApi, expectedBattleTag, guid)
+      resolvedBnetAccountID = accountInfo and BNetResolver.SanitizeAccountID(accountInfo.bnetAccountID)
+    end
+  end
+
+  if accountInfo == nil or accountInfo.battleTag ~= expectedBattleTag or type(resolvedBnetAccountID) ~= "number" then
+    return nil
+  end
+
+  local gameAccountInfo = accountInfo.gameAccountInfo
+  local resolvedGameAccountID = BNetResolver.SanitizeAccountID(gameAccountInfo and gameAccountInfo.gameAccountID)
+  if type(resolvedGameAccountID) ~= "number" then
+    resolvedGameAccountID = nil
+  end
+
+  payload.bnetAccountID = resolvedBnetAccountID
+  payload.gameAccountID = resolvedGameAccountID
+  if conversation then
+    conversation.bnetAccountID = resolvedBnetAccountID
+  end
+
+  return resolvedBnetAccountID
+end
+
+local function normalizeOutgoingText(payload, text)
+  if type(text) ~= "string" then
+    return text
+  end
+  local isClassicCharacterWhisper = FlavorCompat.isClassic and (payload.channel == nil or payload.channel == "WOW")
+  if isClassicCharacterWhisper then
+    return QuestLinkClassic.Serialize(text)
+  end
+  return QuestLinkClassic.Rewrite(text)
+end
+
+local function canonicalReactionText(text)
+  if type(QuestLinkClassic.CanonicalizeForTransport) == "function" then
+    return QuestLinkClassic.CanonicalizeForTransport(text)
+  end
+  return text
+end
+
+local function canonicalTargetText(text)
+  if type(QuestLinkClassic.Serialize) == "function" then
+    return QuestLinkClassic.Serialize(text)
+  end
+  return text
+end
+
+local function dispatchReactionMetadata(runtime, payload, addonPayload)
+  if type(addonPayload) ~= "string" then
+    return false
+  end
+  AddonComm.RegisterPrefix(runtime.chatApi, REACTION_ADDON_PREFIX)
+  if payload.channel == "BN" then
+    return AddonComm.SendBNet(runtime.bnetApi, REACTION_ADDON_PREFIX, addonPayload, payload.gameAccountID)
+  end
+  return AddonComm.Send(runtime.chatApi, REACTION_ADDON_PREFIX, addonPayload, payload.target)
+end
+
+-- Sends one whisper with its Classic quest-link side message. A character
+-- whisper error is not caught (see below); returns false only when the
+-- Battle.net send fails.
+local function sendWhisper(runtime, payload, text)
+  if payload.channel == "BN" then
+    local callOk = pcall(Gateway.SendBattleNetWhisper, runtime.bnetApi, payload.bnetAccountID, text)
+
+    -- Classic Battle.net character whispers also strip the `(id)` from
+    -- `[Name (id)]` and the `|H...|h` envelope. Ship the same paired side
+    -- channel as the WoW whisper path, but via SendGameData to the resolved
+    -- game account. Receivers with our addon splice the link back in on
+    -- BN_CHAT_MSG_ADDON.
+    if callOk and FlavorCompat.isClassic and payload.gameAccountID ~= nil then
+      local encoded = QuestLinkExchange.Encode(text)
+      if encoded ~= nil then
+        AddonComm.RegisterPrefix(runtime.chatApi, QUEST_LINK_ADDON_PREFIX)
+        AddonComm.SendBNet(runtime.bnetApi, QUEST_LINK_ADDON_PREFIX, encoded, payload.gameAccountID)
+      end
+    end
+    return callOk
+  end
+
+  -- SendChatMessage is hardware-event-protected; pcall breaks the
+  -- propagation chain causing ADDON_ACTION_FORBIDDEN.  Call directly
+  -- and let WoW's error handler surface failures instead.
+  Gateway.SendCharacterWhisper(runtime.chatApi, payload.target, text)
+
+  -- Side channel: on Classic the chat protocol strips both the `|H`
+  -- envelope AND the `(id)` from `[Name (id)]` patterns, leaving the
+  -- recipient with just `[Name]`. We ship the id+name pairs over the
+  -- addon-message wire so a recipient running our addon can splice the
+  -- clickable link back in. Best-effort — failure here doesn't fail the
+  -- whisper itself.
+  if FlavorCompat.isClassic then
+    local encoded = QuestLinkExchange.Encode(text)
+    if encoded ~= nil and payload.target ~= nil and payload.target ~= "" then
+      AddonComm.RegisterPrefix(runtime.chatApi, QUEST_LINK_ADDON_PREFIX)
+      AddonComm.Send(runtime.chatApi, QUEST_LINK_ADDON_PREFIX, encoded, payload.target)
+    end
+  end
+  return true
+end
+
+local function reportFailure(runtime, payload, refreshWindow)
+  appendUnsentOutgoing(runtime, payload, "failed", "Send failed")
+  runtime.sendStatusByConversation[payload.conversationKey] = Availability.FromStatus("Send failed")
+  refreshWindow()
+  return false
+end
+
+local function finishSent(runtime, payload, wireId, refreshWindow)
+  -- Only known addon users get the reply link; the whisper stays plain text.
+  if LivePresence.HasPeer(runtime, payload.conversationKey) then
+    dispatchReactionMetadata(runtime, payload, MessageReplies.EncodeLink(wireId, payload.replyTo))
+  end
+  refreshWindow()
+  return true
+end
+
+local function sendLong(runtime, payload, parts, refreshWindow)
+  local sent = SendParts.Send(runtime, payload, parts, {
+    sendWhisper = function(text)
+      return sendWhisper(runtime, payload, text)
+    end,
+    dispatch = function(addonPayload)
+      dispatchReactionMetadata(runtime, payload, addonPayload)
+    end,
+    canonical = canonicalReactionText,
+  })
+  if not sent then
+    return reportFailure(runtime, payload, refreshWindow)
+  end
+  return finishSent(runtime, payload, payload.wireId, refreshWindow)
+end
+
+function SendHandler.HandleSend(runtime, payload, refreshWindow)
+  local locked = lockReason(runtime)
+  if locked then
+    appendUnsentOutgoing(runtime, payload, "queued", locked)
+    runtime.sendStatusByConversation[payload.conversationKey] = Availability.FromStatus(locked)
+    refreshWindow()
+    return false
+  end
+
+  local sendAvailable
+  if payload.channel == "BN" then
+    local resolvedBnetAccountID = resolveBattleNetRecipient(runtime, payload)
+    sendAvailable = resolvedBnetAccountID ~= nil and Gateway.CanSendBattleNetWhisper(runtime.bnetApi)
+  else
+    sendAvailable = Gateway.CanSendCharacterWhisper(runtime.chatApi)
+  end
+
+  if not sendAvailable then
+    runtime.sendStatusByConversation[payload.conversationKey] = Availability.FromStatus("Send unavailable")
+    refreshWindow()
+    return false
+  end
+  runtime.sendStatusByConversation[payload.conversationKey] = nil
+
+  local reactionControl = type(payload.reactionControl) == "table" and payload.reactionControl or nil
+  if reactionControl then
+    local operation = reactionControl.operation or {}
+    local normalizedSource = canonicalReactionText(normalizeOutgoingText(payload, reactionControl.sourceText or ""))
+    payload.text = MessageReactionProtocol.BuildFallback(operation.key, operation.operation, normalizedSource, reactionControl.hintSuffix)
+  else
+    payload.text = normalizeOutgoingText(payload, payload.text)
+    local parts = SendParts.Split(payload)
+    if parts then
+      return sendLong(runtime, payload, parts, refreshWindow)
+    end
+  end
+
+  local wireId
+  local reactionAddonPayload
+  if reactionControl then
+    local operation = reactionControl.operation or {}
+    reactionAddonPayload = MessageReactionProtocol.EncodeReaction(
+      operation.operation,
+      operation.key,
+      operation.wireId,
+      canonicalTargetText(reactionControl.sourceText),
+      canonicalReactionText(payload.text)
+    )
+    local encodedOperation = MessageReactionProtocol.Decode(reactionAddonPayload)
+    if encodedOperation then
+      reactionControl.operation = encodedOperation
+    end
+  else
+    wireId = payload.wireId or MessageReactionProtocol.NewWireId(runtime, runtime.now and runtime.now() or 0)
+    payload.wireId = wireId
+    reactionAddonPayload = MessageReactionProtocol.EncodeIdentity(wireId, canonicalReactionText(payload.text))
+  end
+
+  local pendingConversationKey = Router.RecordPendingSend(runtime, payload, payload.text, {
+    wireId = wireId,
+    reactionControl = reactionControl,
+    replyTo = payload.replyTo,
+  })
+  if not sendWhisper(runtime, payload, payload.text) then
+    local pending = runtime.pendingOutgoing[pendingConversationKey]
+    if pending and #pending > 0 then
+      table.remove(pending, #pending)
+      if #pending == 0 then
+        runtime.pendingOutgoing[pendingConversationKey] = nil
+      end
+    end
+    return reportFailure(runtime, payload, refreshWindow)
+  end
+
+  dispatchReactionMetadata(runtime, payload, reactionAddonPayload)
+  return finishSent(runtime, payload, wireId, refreshWindow)
+end
+
+ns.BootstrapSendHandler = SendHandler
+return SendHandler

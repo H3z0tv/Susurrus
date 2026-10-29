@@ -1,0 +1,142 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Common = ns.BootstrapLifecycleHandlersCommon
+  or (type(require) == "function" and require("Susurrus.Core.Bootstrap.LifecycleHandlers.Common"))
+  or nil
+local ChatReplyState = ns.ChatReplyState or (type(require) == "function" and require("Susurrus.Util.ChatReplyState")) or nil
+local FlavorCompat = ns.FlavorCompat or (type(require) == "function" and require("Susurrus.Core.FlavorCompat")) or nil
+
+local Competitive = {}
+
+local function canClearStaleWhisperReplyState(runtime, deps)
+  if runtime and ChatReplyState and ChatReplyState.CaptureStaleWhisperReplyTarget then
+    local _, resolved = ChatReplyState.CaptureStaleWhisperReplyTarget(runtime, deps.getNumChatWindows, deps.getEditBox)
+    return resolved ~= false
+  end
+  return true
+end
+
+function Competitive.handleChallengeModeEvent(Bootstrap, event)
+  if
+    (event == "CHALLENGE_MODE_START" or event == "CHALLENGE_MODE_COMPLETED" or event == "CHALLENGE_MODE_RESET")
+    and (not FlavorCompat or not FlavorCompat.hasMythicPlus)
+  then
+    return true
+  end
+
+  if event == "CHALLENGE_MODE_START" then
+    -- Guard against double-suspend (ADDON_RESTRICTION_STATE_CHANGED may have
+    -- suspended already): a second suspend() would clobber the saved
+    -- window-visibility state with the already-hidden window.
+    if not Bootstrap._inMythicContent then
+      Bootstrap._inMythicContent = true
+      if Bootstrap.runtime and Bootstrap.runtime.suspend then
+        Bootstrap.runtime.suspend()
+      end
+    end
+    Common.notifyCompetitiveState(Bootstrap)
+    return true
+  end
+
+  if event == "CHALLENGE_MODE_COMPLETED" or event == "CHALLENGE_MODE_RESET" then
+    if Bootstrap._inMythicContent then
+      Bootstrap._inMythicContent = false
+      Bootstrap._inEncounter = false
+      Bootstrap._inCompetitiveContent = false
+      if Bootstrap.runtime and Bootstrap.runtime.resume then
+        Bootstrap.runtime.resume()
+      end
+    end
+    Common.notifyCompetitiveState(Bootstrap)
+    return true
+  end
+
+  return false
+end
+
+-- Raw encounter events also fire for unrestricted legacy bosses; ADDON_RESTRICTION_STATE_CHANGED owns Midnight restriction state.
+function Competitive.handleEncounterEvent(Bootstrap, event, deps)
+  if event == "ENCOUNTER_START" then
+    return true
+  end
+
+  if event == "ENCOUNTER_END" then
+    if canClearStaleWhisperReplyState(Bootstrap.runtime, deps) and ChatReplyState and ChatReplyState.ClearStaleWhisperReplyState then
+      ChatReplyState.ClearStaleWhisperReplyState(deps.getNumChatWindows, deps.getEditBox)
+    end
+    return true
+  end
+
+  return false
+end
+
+function Competitive.handleCombatStart(Bootstrap)
+  local runtime = Bootstrap.runtime
+  local settings = runtime and runtime.accountState and runtime.accountState.settings
+  if
+    settings
+    and settings.hideOnCombat == true
+    and runtime
+    and runtime.isWindowVisible
+    and runtime.setWindowVisible
+    and runtime.isWindowVisible()
+  then
+    runtime.setWindowVisible(false)
+  end
+  return true
+end
+
+function Competitive.handleCombatEnd(Bootstrap, deps)
+  if canClearStaleWhisperReplyState(Bootstrap.runtime, deps) and ChatReplyState and ChatReplyState.ClearStaleWhisperReplyState then
+    ChatReplyState.ClearStaleWhisperReplyState(deps.getNumChatWindows, deps.getEditBox)
+  end
+  return true
+end
+
+function Competitive.handleZoneChangedNewArea(Bootstrap, deps)
+  local ContentDetector = deps.getContentDetector()
+
+  -- Update competitive content flag on every zone change so the chat
+  -- filter bypasses correctly when entering/leaving PvP or arenas.
+  if Bootstrap._inCompetitiveContent or Bootstrap._inMythicContent then
+    local isCompetitive = ContentDetector and ContentDetector.IsCompetitiveContent(_G.GetInstanceInfo) or false
+    Bootstrap._inCompetitiveContent = isCompetitive
+    if Bootstrap.syncChatFilters then
+      Bootstrap.syncChatFilters()
+    end
+    Common.notifyCompetitiveState(Bootstrap)
+  end
+
+  if not Bootstrap._inMythicContent then
+    return true
+  end
+
+  local isMythic = ContentDetector and ContentDetector.IsMythicRestricted(_G.GetInstanceInfo) or false
+  if not isMythic then
+    Bootstrap._inMythicContent = false
+    if Bootstrap.runtime and Bootstrap.runtime.resume then
+      Bootstrap.runtime.resume()
+    end
+
+    local PresenceCache = deps.getPresenceCache()
+    if PresenceCache then
+      Common.scheduleAfter(2, function()
+        if Bootstrap._inMythicContent then
+          return
+        end
+        PresenceCache.Rebuild()
+        Common.refreshRuntimeWindow(Bootstrap)
+      end)
+    end
+
+    Common.notifyCompetitiveState(Bootstrap)
+  end
+
+  return true
+end
+
+ns.BootstrapLifecycleHandlersCompetitive = Competitive
+return Competitive

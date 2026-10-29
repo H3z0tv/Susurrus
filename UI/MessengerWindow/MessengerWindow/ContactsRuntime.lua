@@ -1,0 +1,282 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ContactsController = ns.MessengerWindowContactsController or require("Susurrus.UI.MessengerWindow.ContactsController")
+local ContactsSearchController = ns.MessengerWindowContactsSearchController
+  or require("Susurrus.UI.MessengerWindow.MessengerWindow.ContactsSearchController")
+local ContactSearch = ns.MessengerWindowContactSearch or require("Susurrus.UI.MessengerWindow.MessengerWindow.ContactSearch")
+local TabToggle = ns.ContactsListTabToggle or require("Susurrus.UI.ContactsList.TabToggle")
+local ContactsTabFilter = ns.ContactsTabFilter or require("Susurrus.UI.ContactsList.ContactsTabFilter")
+local EmptyState = ns.ContactsListEmptyState or require("Susurrus.UI.ContactsList.EmptyState")
+local BadgeFilter = ns.ToggleIconBadgeFilter or require("Susurrus.UI.ToggleIcon.BadgeFilter")
+local Localization = ns.Localization or require("Susurrus.Locale.Localization")
+local ConversationSnapshot = ns.ConversationSnapshot or require("Susurrus.Model.ConversationSnapshot")
+
+local ContactsRuntime = {}
+
+function ContactsRuntime.Create(factory, options)
+  options = options or {}
+
+  -- Resolve settings config; showGroupChats defaults to true when absent
+  local settingsConfig = options.settingsConfig or {}
+  local function getShowGroupChats()
+    return settingsConfig.showGroupChats ~= false
+  end
+  local function getRequestsInbox()
+    return settingsConfig.requestsInbox ~= false
+  end
+  local function getChannelsTab()
+    return ConversationSnapshot.HasChannelsTab(settingsConfig)
+  end
+  -- The contacts pane is the collapsed icon rail.
+  local function isCompact()
+    return options.isCompact ~= nil and options.isCompact() == true
+  end
+  -- Footer tabs in order; the footer shows only when there is a choice.
+  local function visibleTabModes()
+    local modes = { "whispers" }
+    if getShowGroupChats() then
+      modes[#modes + 1] = "groups"
+    end
+    if getChannelsTab() then
+      modes[#modes + 1] = "channels"
+    end
+    if getRequestsInbox() then
+      modes[#modes + 1] = "requests"
+    end
+    return modes
+  end
+
+  -- Tab toggle mode — persists in characterState via onTabModeChanged
+  local currentTabMode = (options.initialTabMode and options.initialTabMode ~= "") and options.initialTabMode or "whispers"
+  if (currentTabMode == "requests" and not getRequestsInbox()) or (currentTabMode == "channels" and not getChannelsTab()) then
+    currentTabMode = "whispers"
+  end
+
+  -- Forward-declare so the tab toggle callback can call it after
+  -- contactsSearchController is wired below.
+  local triggerTabRefresh = nil
+
+  -- Build tab toggle UI: a window child hanging below it, so it stays up
+  -- while an addon panel replaces the contacts pane.
+  local tabToggle = nil
+  if options.contactsPane then
+    tabToggle = TabToggle.Create(factory, options.windowFrame or options.contactsPane, {
+      initialMode = currentTabMode,
+      nativeChrome = options.nativeChrome == true,
+      windowFrame = options.windowFrame,
+      onModeChanged = function(mode)
+        if mode == currentTabMode then
+          return
+        end
+        local oldMode = currentTabMode
+        currentTabMode = mode
+        if options.onTabModeChanged then
+          options.onTabModeChanged(mode)
+        end
+        if triggerTabRefresh then
+          triggerTabRefresh()
+        end
+        -- Fires after the list has re-filtered so `contacts.rows` already
+        -- contains the new-mode rows when the caller swaps selection.
+        if options.onTabModeSwapSelection then
+          options.onTabModeSwapSelection(oldMode, mode)
+        end
+      end,
+    })
+    -- Keeps the level it had as a pane child so the HUD border never covers
+    -- the tab tops; the relayout re-lifts it when the window is raised.
+    local pane = options.contactsPane
+    if tabToggle.frame.SetFrameLevel and pane.GetFrameLevel then
+      tabToggle.frame:SetFrameLevel(pane:GetFrameLevel() + 1)
+    end
+  end
+
+  -- The toggle shows itself while more than one tab is visible.
+  local function applyTabModes()
+    if tabToggle == nil then
+      return
+    end
+    tabToggle.setModes(visibleTabModes())
+  end
+  applyTabModes()
+
+  local contactsController = ContactsController.Create(factory, options.contactsView, options.initialContacts or {}, {
+    getHideMessagePreview = function()
+      return settingsConfig.hideMessagePreview == true
+    end,
+    getCompact = isCompact,
+    onSelect = function(item)
+      if options.onContactClicked then
+        options.onContactClicked(item)
+      end
+      if options.onSelect then
+        options.onSelect(item)
+      end
+    end,
+    onPin = function(item)
+      if options.onPin then
+        options.onPin(item)
+      end
+    end,
+    onRemove = function(item)
+      if options.onRemove then
+        options.onRemove(item)
+      end
+    end,
+    onMarkUnread = function(item)
+      if options.onMarkUnread then
+        options.onMarkUnread(item)
+      end
+    end,
+    onUpdatePrefs = function(item, changes)
+      if options.onUpdatePrefs then
+        options.onUpdatePrefs(item, changes)
+      end
+    end,
+    onIgnorePlayer = options.onIgnorePlayer,
+    onUnblockPlayer = options.onUnblockPlayer,
+    isPlayerBlocked = options.isPlayerBlocked,
+    whoPlayer = options.whoPlayer,
+    onReorder = function(orders)
+      if options.onReorder then
+        options.onReorder(orders)
+      end
+    end,
+  })
+
+  local contacts = {
+    rows = contactsController.rows,
+    scrollFrame = contactsController.scrollFrame,
+    scrollBar = contactsController.scrollBar,
+    content = contactsController.content,
+    view = contactsController.view,
+  }
+
+  -- Empty-state hint shown when Groups tab is active but has no conversations.
+  local emptyStateFrame = nil
+  if options.contactsView then
+    local contentParent = contactsController.content or options.contactsView
+    emptyStateFrame = EmptyState.Create(contentParent)
+  end
+
+  -- Re-resolved on every filter so a live language switch picks up the new
+  -- locale without requiring /reload. Caching at create time meant the empty
+  -- state stayed in the previous language until reload.
+  local GROUPS_EMPTY_KEY = "No group chats yet.\nJoin a party or instance to see messages here."
+  local REQUESTS_EMPTY_KEY = "No message requests."
+  local CHANNELS_EMPTY_KEY = "No channel messages yet."
+  local WHISPERS_EMPTY_KEY = "No conversations yet. Click Start New Whisper to message a friend."
+
+  -- True while the search box has text, so the whispers empty-state hint
+  -- only shows for a genuinely empty list, not a "no results" search.
+  local function hasSearchText()
+    local input = options.contactsSearchInput
+    if input == nil then
+      return false
+    end
+    local text = (input.GetText and input:GetText()) or input.text or ""
+    return ContactSearch.NormalizeSearchQuery(text) ~= ""
+  end
+
+  local contactsSearchController = ContactsSearchController.Create({
+    contacts = contacts,
+    contactsController = contactsController,
+    contactSearch = options.contactSearch or ContactSearch,
+    initialContacts = options.initialContacts or {},
+    contactsSearchInput = options.contactsSearchInput,
+    contactsSearchClearButton = options.contactsSearchClearButton,
+    contactsSearchPlaceholder = options.contactsSearchPlaceholder,
+    getSelectedConversationKey = options.getSelectedConversationKey,
+    getTabFilter = function(items)
+      return ContactsTabFilter.Apply(items, currentTabMode, getShowGroupChats())
+    end,
+    onAfterFilter = function(filtered, allContacts)
+      -- Per-tab unread counters rendered as circular badges next to the labels.
+      if tabToggle and tabToggle.setUnreadCounts then
+        local source = allContacts or filtered
+        tabToggle.setUnreadCounts(
+          BadgeFilter.SumWhisperUnread(source),
+          BadgeFilter.SumGroupUnread(source),
+          BadgeFilter.SumRequestUnread(source),
+          BadgeFilter.SumChannelUnread(source)
+        )
+      end
+      if options.onAllContactsRefreshed then
+        options.onAllContactsRefreshed(allContacts or filtered)
+      end
+      -- Nothing to search on an empty tab; a query with no matches keeps the
+      -- box so it can be cleared.
+      if options.onSearchAvailableChanged then
+        options.onSearchAvailableChanged(#filtered > 0 or hasSearchText())
+      end
+      if emptyStateFrame == nil then
+        return
+      end
+      -- The rail has no room for the hint text.
+      if isCompact() then
+        EmptyState.Hide(emptyStateFrame)
+      elseif currentTabMode == "groups" and getShowGroupChats() and #filtered == 0 then
+        EmptyState.Show(emptyStateFrame, Localization.Text(GROUPS_EMPTY_KEY))
+      elseif currentTabMode == "requests" and #filtered == 0 and not hasSearchText() then
+        EmptyState.Show(emptyStateFrame, Localization.Text(REQUESTS_EMPTY_KEY))
+      elseif currentTabMode == "channels" and #filtered == 0 and not hasSearchText() then
+        EmptyState.Show(emptyStateFrame, Localization.Text(CHANNELS_EMPTY_KEY))
+      elseif currentTabMode == "whispers" and #filtered == 0 and not hasSearchText() then
+        EmptyState.Show(emptyStateFrame, Localization.Text(WHISPERS_EMPTY_KEY))
+      else
+        EmptyState.Hide(emptyStateFrame)
+      end
+    end,
+  })
+
+  -- Now that contactsSearchController exists, wire the forward declaration.
+  triggerTabRefresh = function()
+    contactsSearchController.refresh(nil, nil, true)
+  end
+
+  return {
+    contactsController = contactsController,
+    contacts = contacts,
+    tabToggle = tabToggle,
+    refreshContacts = function(nextContacts, selectedConversationKey, resetPaging)
+      return contactsSearchController.refresh(nextContacts, selectedConversationKey, resetPaging)
+    end,
+    getCurrentContacts = function()
+      return contactsSearchController.getCurrentContacts()
+    end,
+    bindInputScripts = function()
+      contactsSearchController.bindInputScripts()
+    end,
+    refreshTabToggleVisibility = applyTabModes,
+    setTabMode = function(mode)
+      local resolved = mode or "whispers"
+      if resolved == currentTabMode then
+        return
+      end
+      local oldMode = currentTabMode
+      currentTabMode = resolved
+      if tabToggle then
+        tabToggle.setMode(currentTabMode)
+      end
+      if options.onTabModeChanged then
+        options.onTabModeChanged(currentTabMode)
+      end
+      if triggerTabRefresh then
+        triggerTabRefresh()
+      end
+      if options.onTabModeSwapSelection then
+        options.onTabModeSwapSelection(oldMode, currentTabMode)
+      end
+    end,
+    getTabMode = function()
+      return currentTabMode
+    end,
+  }
+end
+
+ns.MessengerWindowContactsRuntime = ContactsRuntime
+
+return ContactsRuntime

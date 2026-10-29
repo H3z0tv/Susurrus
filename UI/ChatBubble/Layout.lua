@@ -1,0 +1,277 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Theme = ns.Theme or require("Susurrus.UI.Theme")
+local Fonts = ns.ThemeFonts or require("Susurrus.UI.Theme.Fonts")
+local MessageReactions = ns.MessageReactions or require("Susurrus.Model.MessageReactions")
+local ReactionAssets = ns.ChatBubbleReactionAssets or require("Susurrus.UI.ChatBubble.ReactionAssets")
+
+local Grouping = ns.ChatBubbleGrouping or require("Susurrus.UI.ChatBubble.Grouping")
+local BubbleFrame = ns.ChatBubbleBubbleFrame or require("Susurrus.UI.ChatBubble.BubbleFrame")
+local DateSeparator = ns.ChatBubbleDateSeparator or require("Susurrus.UI.ChatBubble.DateSeparator")
+local FramePool = ns.ChatBubbleFramePool or require("Susurrus.UI.ChatBubble.FramePool")
+local SenderLabel = ns.ChatBubbleSenderLabel or require("Susurrus.UI.ChatBubble.SenderLabel")
+local ReplyQuote = ns.ChatBubbleReplyQuote or require("Susurrus.UI.ChatBubble.ReplyQuote")
+local RowReuse = ns.ChatBubbleRowReuse or require("Susurrus.UI.ChatBubble.RowReuse")
+local BubbleColors = ns.ThemeBubbleColors or require("Susurrus.UI.Theme.BubbleColors")
+local TimeFormat = ns.TimeFormat or require("Susurrus.Util.TimeFormat")
+
+local Layout = {}
+Layout.MESSAGE_EDGE_INSET = Theme.LAYOUT.MESSAGE_EDGE_INSET
+
+local BUBBLE_SPACING = Theme.LAYOUT.BUBBLE_SPACING
+local BUBBLE_GROUP_SPACING = Theme.LAYOUT.BUBBLE_GROUP_SPACING
+local DEFAULT_FONT_SIZE = 12
+local FONT_LINE_HEIGHT_OFFSET = 4
+local ESTIMATED_GLYPH_WIDTH = 7
+local SENDER_LABEL_HEIGHT = 18
+local geometryRevision = 0
+local geometryFontSize
+local geometryFontMode
+local geometryFontOutline
+local geometryLanguage
+local lookFontColor
+local lookBubblePreset
+local lookTimeFormat
+local lookTimeSource
+
+local function isDifferentDay(previousMessage, message)
+  if previousMessage == nil then
+    return false
+  end
+  if ns.TimeFormat and ns.TimeFormat.IsDifferentDay then
+    return ns.TimeFormat.IsDifferentDay(previousMessage.sentAt, message.sentAt)
+  end
+  local previousDay = math.floor((previousMessage.sentAt or 0) / 86400)
+  local currentDay = math.floor((message.sentAt or 0) / 86400)
+  return previousDay ~= currentDay
+end
+
+local function placeBubble(frame, contentFrame, message, paneWidth, yOffset)
+  frame:ClearAllPoints()
+
+  if message.kind == "system" then
+    frame:SetPoint("TOP", contentFrame, "TOPLEFT", paneWidth / 2, -yOffset)
+  elseif message.direction == "out" then
+    frame:SetPoint("TOPRIGHT", contentFrame, "TOPRIGHT", -Layout.MESSAGE_EDGE_INSET, -yOffset)
+  else
+    frame:SetPoint("TOPLEFT", contentFrame, "TOPLEFT", Layout.MESSAGE_EDGE_INSET, -yOffset)
+  end
+end
+
+local function rowPrefixHeight(previousMessage, message, isFirst, hasUnreadDivider)
+  local grouped = Grouping.ShouldGroup(previousMessage, message)
+  local height = 0
+  if isDifferentDay(previousMessage, message) then
+    height = height + Theme.LAYOUT.DATE_SEPARATOR_HEIGHT + BUBBLE_GROUP_SPACING
+  end
+  if hasUnreadDivider then
+    height = height + Theme.LAYOUT.DATE_SEPARATOR_HEIGHT + BUBBLE_SPACING
+  elseif not isFirst then
+    height = height + (grouped and BUBBLE_SPACING or BUBBLE_GROUP_SPACING)
+  end
+  if not grouped and message.kind ~= "system" then
+    height = height + SENDER_LABEL_HEIGHT
+  end
+  return height
+end
+
+-- Bumped when anything a built bubble bakes in changes: font geometry, and the
+-- look settings (text color, bubble color, time format). Kept bubbles are
+-- only redrawn when this moves.
+function Layout.GetGeometryRevision()
+  local fontSize = type(Fonts.GetFontSize) == "function" and Fonts.GetFontSize() or DEFAULT_FONT_SIZE
+  local fontMode = type(Fonts.GetMode) == "function" and Fonts.GetMode() or nil
+  local fontOutline = type(Fonts.GetOutline) == "function" and Fonts.GetOutline() or nil
+  local language = type(Fonts.GetLanguage) == "function" and Fonts.GetLanguage() or nil
+  if geometryFontSize ~= fontSize or geometryFontMode ~= fontMode or geometryFontOutline ~= fontOutline or geometryLanguage ~= language then
+    geometryRevision = geometryRevision + 1
+    geometryFontSize = fontSize
+    geometryFontMode = fontMode
+    geometryFontOutline = fontOutline
+    geometryLanguage = language
+  end
+  local fontColor = Fonts.GetFontColorRGBA()
+  local bubblePreset = BubbleColors.GetPreset()
+  local timeFormat, timeSource = TimeFormat.GetConfig()
+  if lookFontColor ~= fontColor or lookBubblePreset ~= bubblePreset or lookTimeFormat ~= timeFormat or lookTimeSource ~= timeSource then
+    geometryRevision = geometryRevision + 1
+    lookFontColor = fontColor
+    lookBubblePreset = bubblePreset
+    lookTimeFormat = timeFormat
+    lookTimeSource = timeSource
+  end
+  return geometryRevision
+end
+
+-- hasUnreadDivider: the row opens with the "New messages" divider.
+function Layout.EstimateRowHeight(previousMessage, message, paneWidth, isFirst, hasUnreadDivider)
+  local kind = message.kind or "user"
+  local paddingHorizontal = kind == "system" and 8 or Theme.LAYOUT.BUBBLE_PADDING_H
+  local paddingVertical = kind == "system" and 4 or Theme.LAYOUT.BUBBLE_PADDING_V
+  local textWidth = math.max(paneWidth * Theme.LAYOUT.BUBBLE_MAX_WIDTH_PCT - paddingHorizontal * 2, 1)
+  local fontSize = type(Fonts.GetFontSize) == "function" and Fonts.GetFontSize() or DEFAULT_FONT_SIZE
+  local estimatedLineHeight = fontSize + FONT_LINE_HEIGHT_OFFSET
+  local charactersPerLine = math.max(math.floor(textWidth / ESTIMATED_GLYPH_WIDTH), 1)
+  local text = type(message.text) == "string" and message.text or ""
+  local lineCount = math.max(math.ceil(math.max(#text, 1) / charactersPerLine), 1)
+  local height = rowPrefixHeight(previousMessage, message, isFirst, hasUnreadDivider) + lineCount * estimatedLineHeight + paddingVertical * 2
+  if message.isCensored == true then
+    height = height + 12
+  end
+  if type(message.replyTo) == "table" then
+    height = height + ReplyQuote.HEIGHT
+  end
+  local reaction = MessageReactions.VisibleReaction(message)
+  if kind == "user" and reaction and ReactionAssets.GetTexCoords(reaction.key) then
+    height = height + ReactionAssets.GetBadgeOverflow()
+  end
+  return height
+end
+
+-- Index of the sender label that should carry the "Seen" receipt: the start
+-- of the group holding the newest seen outgoing message, and only when that
+-- whole group has been seen. Newer unseen groups simply show nothing, like
+-- other messengers. Returns nil when there is nothing to mark.
+function Layout.SeenLabelIndex(messages)
+  local lastSeen
+  for index = #messages, 1, -1 do
+    local message = messages[index]
+    if message.direction == "out" and message.kind ~= "system" and message.seenAt ~= nil then
+      lastSeen = index
+      break
+    end
+  end
+  if lastSeen == nil then
+    return nil
+  end
+  local groupStart = lastSeen
+  while groupStart > 1 and Grouping.ShouldGroup(messages[groupStart - 1], messages[groupStart]) do
+    groupStart = groupStart - 1
+  end
+  if messages[lastSeen + 1] ~= nil and Grouping.ShouldGroup(messages[lastSeen], messages[lastSeen + 1]) then
+    return nil
+  end
+  return groupStart
+end
+
+local function layoutMessage(pooledFactory, factory, contentFrame, messages, index, paneWidth, yOffset, options, seenIndex)
+  local message = messages[index]
+  local previousMessage = messages[index - 1]
+  if isDifferentDay(previousMessage, message) then
+    local separator = DateSeparator.CreateDateSeparator(pooledFactory, contentFrame, message.sentAt, paneWidth)
+    separator.frame:ClearAllPoints()
+    separator.frame:SetPoint("TOPLEFT", contentFrame, "TOPLEFT", 0, -yOffset)
+    yOffset = yOffset + separator.height + BUBBLE_GROUP_SPACING
+  end
+  local grouped = Grouping.ShouldGroup(previousMessage, message)
+  -- The divider's own padding already separates it from the message, so only
+  -- the small in-group gap follows it.
+  if options and options.unreadDividerMessage == message then
+    local divider = DateSeparator.CreateNewMessagesSeparator(pooledFactory, contentFrame, paneWidth)
+    divider.frame:ClearAllPoints()
+    divider.frame:SetPoint("TOPLEFT", contentFrame, "TOPLEFT", 0, -yOffset)
+    yOffset = yOffset + divider.height + BUBBLE_SPACING
+  elseif index > 1 then
+    yOffset = yOffset + (grouped and BUBBLE_SPACING or BUBBLE_GROUP_SPACING)
+  end
+
+  local showIcon = not grouped and message.kind ~= "system"
+  if showIcon then
+    local labelOptions = contentFrame._wmLabelOptions
+    if labelOptions == nil then
+      labelOptions = {}
+      contentFrame._wmLabelOptions = labelOptions
+    end
+    labelOptions.showSeen = index == seenIndex
+    labelOptions.chatLocked = options and options.chatLocked or nil
+    labelOptions.onMessageAction = options and options.onMessageAction or nil
+    labelOptions.persistentFactory = factory
+    labelOptions.openPlayerMenu = options and options.openPlayerMenu or nil
+    labelOptions.senderFallbackClassTag = options and options.senderFallbackClassTag or nil
+    local label = SenderLabel.CreateSenderLabel(pooledFactory, contentFrame, message, paneWidth, yOffset, labelOptions)
+    yOffset = yOffset + label.height
+  end
+
+  local bubbleOptions = contentFrame._wmBubbleOptions
+  if bubbleOptions == nil then
+    bubbleOptions = {}
+    contentFrame._wmBubbleOptions = bubbleOptions
+  end
+  bubbleOptions.paneWidth = paneWidth
+  bubbleOptions.showIcon = showIcon
+  bubbleOptions.fallbackClassTag = options and options.fallbackClassTag or nil
+  bubbleOptions.iconFactory = FramePool.getFactory(factory, contentFrame, "icon")
+  bubbleOptions.persistentFactory = factory
+  bubbleOptions.onRevealCensored = options and options.onRevealCensored or nil
+  bubbleOptions.onReact = options and options.onReact or nil
+  bubbleOptions.canReact = options and options.canReact or nil
+  bubbleOptions.onReply = options and options.onReply or nil
+  bubbleOptions.canReply = options and options.canReply or nil
+  bubbleOptions.onIgnoreSender = options and options.onIgnoreSender or nil
+  bubbleOptions.canIgnoreSender = options and options.canIgnoreSender or nil
+  bubbleOptions.onQuoteClick = options and options.onQuoteClick or nil
+  bubbleOptions.openPlayerMenu = options and options.openPlayerMenu or nil
+
+  local bubble = BubbleFrame.CreateBubble(pooledFactory, contentFrame, message, bubbleOptions)
+  placeBubble(bubble.frame, contentFrame, message, paneWidth, yOffset)
+  return yOffset + bubble.height
+end
+
+-- reuse: keep the frames of rows that stay in range (scrolling) instead of
+-- rebuilding every visible bubble. Callers pass false when anything the rows
+-- draw changed.
+function Layout.LayoutRange(factory, contentFrame, messages, rows, firstIndex, lastIndex, paneWidth, options, reuse)
+  FramePool.initPool(contentFrame)
+  if not reuse or firstIndex == nil or lastIndex == nil or firstIndex > lastIndex then
+    FramePool.releaseAll(contentFrame)
+  end
+  if firstIndex == nil or lastIndex == nil or firstIndex > lastIndex then
+    return 0, nil
+  end
+
+  local pooledFactory = FramePool.getFactory(factory, contentFrame)
+  local yOffset = rows[firstIndex].offset
+  local firstChanged
+  -- Only whispers carry read receipts; group chats skip the O(n) scan.
+  local seenIndex
+  if not (options and options.seenReceipts == false) then
+    seenIndex = Layout.SeenLabelIndex(messages)
+  end
+  local previousPass = contentFrame._wmLayoutPass
+  local pass = (previousPass or 0) + 1
+  contentFrame._wmLayoutPass = pass
+  if reuse then
+    RowReuse.KeepRows(contentFrame, messages, rows, firstIndex, lastIndex, paneWidth, options, seenIndex, previousPass, pass)
+  end
+
+  local activeFrames = contentFrame._activeFrames
+  for index = firstIndex, lastIndex do
+    local row = rows[index]
+    row.offset = yOffset
+    -- The row's pooled frames, as a span of the active list (edge fade).
+    row.frameFirst = #activeFrames + 1
+    local nextOffset
+    if row.keptPass == pass then
+      RowReuse.Restore(row, contentFrame, activeFrames, yOffset)
+      nextOffset = yOffset + row.height
+    else
+      nextOffset = layoutMessage(pooledFactory, factory, contentFrame, messages, index, paneWidth, yOffset, options, seenIndex)
+      RowReuse.Capture(row, activeFrames)
+    end
+    row.frameLast = #activeFrames
+    RowReuse.Record(row, index, contentFrame, messages, pass, yOffset, paneWidth, options, seenIndex)
+    local measuredHeight = nextOffset - yOffset
+    if row.height ~= measuredHeight then
+      firstChanged = firstChanged or index
+      row.height = measuredHeight
+    end
+    yOffset = nextOffset
+  end
+  return yOffset, firstChanged
+end
+
+ns.ChatBubbleLayout = Layout
+return Layout

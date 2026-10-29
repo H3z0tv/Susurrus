@@ -1,0 +1,124 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local TextLimits = ns.TextLimits or require("Susurrus.Util.TextLimits")
+local StyledTextInputPopup = ns.StyledTextInputPopup or require("Susurrus.UI.Shared.StyledTextInputPopup")
+local Localization = ns.Localization or (type(require) == "function" and require("Susurrus.Locale.Localization")) or nil
+
+local StartConversationDialog = {}
+
+local DIALOG_NAME = "SUSURRUS_START_CONVERSATION"
+
+local function L(key)
+  if Localization and Localization.Text then
+    return Localization.Text(key)
+  end
+  return key
+end
+
+local function resolveConversationPopupEditBox(popup, dialogName)
+  local resolved = StyledTextInputPopup.ResolveEditBox(popup, dialogName)
+  if resolved ~= nil then
+    return resolved
+  end
+  if type(popup) ~= "table" then
+    return nil
+  end
+  if type(popup.editBox) == "table" then
+    return popup.editBox
+  end
+  if type(popup.EditBox) == "table" then
+    return popup.EditBox
+  end
+  if type(popup.GetEditBox) == "function" then
+    local ok, editBox = pcall(popup.GetEditBox, popup)
+    if ok then
+      return editBox
+    end
+  end
+  return nil
+end
+
+local function styleStartConversationDialog(popup, dialogName, value)
+  StyledTextInputPopup.Apply(popup, dialogName, value, StyledTextInputPopup.INPUT_STYLE)
+end
+
+local function restoreStartConversationDialog(popup, dialogName)
+  StyledTextInputPopup.Restore(popup, dialogName, StyledTextInputPopup.RESTORE_STYLE)
+end
+
+local function applyDialogText(dialog)
+  if type(dialog) ~= "table" then
+    return
+  end
+  dialog.text = L("Start a new conversation")
+  dialog.button1 = L("Start")
+  dialog.button2 = L("Cancel")
+end
+
+function StartConversationDialog.Wire(newConversationButton, options)
+  options = options or {}
+  if not newConversationButton or type(newConversationButton.SetScript) ~= "function" then
+    return { setLanguage = function() end }
+  end
+  if type(options.onStartConversation) ~= "function" then
+    return { setLanguage = function() end }
+  end
+
+  if type(_G.StaticPopupDialogs) ~= "table" then
+    _G.StaticPopupDialogs = {}
+  end
+
+  local dialog = _G.StaticPopupDialogs[DIALOG_NAME]
+  if type(dialog) ~= "table" then
+    dialog = StyledTextInputPopup.NewDialog()
+    dialog.maxLetters = 255
+    _G.StaticPopupDialogs[DIALOG_NAME] = dialog
+  end
+  applyDialogText(dialog)
+
+  dialog.OnAccept = function(popup)
+    local editBox = resolveConversationPopupEditBox(popup, DIALOG_NAME)
+    local playerName = TextLimits.Trim(editBox and editBox.GetText and editBox:GetText() or nil)
+    if playerName ~= nil and dialog._wmOnStartConversation then
+      dialog._wmOnStartConversation(playerName)
+    end
+  end
+  dialog._wmOnStartConversation = options.onStartConversation
+  dialog.OnShow = function(popup, data)
+    local value = tostring((popup and popup.data) or data or "")
+    styleStartConversationDialog(popup, DIALOG_NAME, value)
+  end
+  dialog.OnHide = function(popup)
+    restoreStartConversationDialog(popup, DIALOG_NAME)
+  end
+
+  newConversationButton:SetScript("OnClick", function()
+    if type(_G.StaticPopup_Show) ~= "function" then
+      return
+    end
+
+    local popup = _G.StaticPopup_Show(DIALOG_NAME)
+    if type(popup) == "table" then
+      popup.data = ""
+      styleStartConversationDialog(popup, DIALOG_NAME, "")
+    end
+
+    local editBox = resolveConversationPopupEditBox(popup, DIALOG_NAME) or _G.StaticPopup1EditBox
+    if editBox and editBox.SetFocus then
+      editBox:SetFocus()
+    end
+  end)
+
+  return {
+    setLanguage = function()
+      applyDialogText(_G.StaticPopupDialogs and _G.StaticPopupDialogs[DIALOG_NAME])
+    end,
+  }
+end
+
+ns.MessengerWindowWindowScriptsButtonsStartConversationDialog = StartConversationDialog
+
+return StartConversationDialog

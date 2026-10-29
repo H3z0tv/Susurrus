@@ -1,0 +1,238 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ReactionPicker = ns.ChatBubbleReactionPicker or require("Susurrus.UI.ChatBubble.ReactionPicker")
+local select = select
+
+local FramePool = {}
+
+function FramePool.initPool(contentFrame)
+  if not contentFrame._freeFrames then
+    contentFrame._freeFrames = {}
+    contentFrame._activeFrames = {}
+    -- Migrate legacy _bubblePool if present
+    if contentFrame._bubblePool then
+      for _, f in ipairs(contentFrame._bubblePool) do
+        if f.Hide then
+          f:Hide()
+        end
+        table.insert(contentFrame._freeFrames, f)
+      end
+      contentFrame._bubblePool = nil
+    end
+  end
+end
+
+-- poolKey (optional) keeps a role's frames to itself: an icon frame handed to
+-- a label would lose its masked texture and have to build a new one.
+function FramePool.acquireFrame(realFactory, contentFrame, frameType, parent, poolKey)
+  local key = poolKey or frameType
+  local free = contentFrame._freeFrames
+  local frame
+  for index = #free, 1, -1 do
+    local candidate = free[index]
+    local candidateKey = candidate._wmPoolKey or candidate._wmPoolFrameType or "Frame"
+    if candidateKey == key then
+      frame = table.remove(free, index)
+      break
+    end
+  end
+  if frame then
+    if frame.Show then
+      frame:Show()
+    end
+    if frame.ClearAllPoints then
+      frame:ClearAllPoints()
+    end
+  else
+    frame = realFactory.CreateFrame(frameType, nil, parent)
+    frame._wmPoolFrameType = frameType
+    frame._wmPoolKey = poolKey
+  end
+  table.insert(contentFrame._activeFrames, frame)
+  return frame
+end
+
+function FramePool.getFactory(realFactory, contentFrame, poolKey)
+  local state = contentFrame._wmPooledFactoryState
+  if state == nil then
+    state = {
+      contentFrame = contentFrame,
+      realFactory = realFactory,
+      factories = {},
+    }
+    contentFrame._wmPooledFactoryState = state
+  else
+    state.realFactory = realFactory
+  end
+  local factoryKey = poolKey or ""
+  local factory = state.factories[factoryKey]
+  if factory == nil then
+    factory = {
+      CreateFrame = function(frameType, _name, parent)
+        return FramePool.acquireFrame(state.realFactory, state.contentFrame, frameType, parent, poolKey)
+      end,
+    }
+    state.factories[factoryKey] = factory
+  end
+  return factory
+end
+
+local function hideRegions(...)
+  for index = 1, select("#", ...) do
+    local region = select(index, ...)
+    if region and region.Hide then
+      region:Hide()
+    end
+  end
+end
+
+function FramePool.hideAllRegions(frame)
+  if frame.GetRegions then
+    hideRegions(frame:GetRegions())
+  end
+  if frame.GetChildren then
+    hideRegions(frame:GetChildren())
+  end
+end
+
+-- Interactive scripts wired by pooled chat widgets. Cleared on release so a
+-- recycled frame cannot replay its old role's handlers in a new role.
+local POOLED_INTERACTIVE_SCRIPTS = {
+  "OnEnter",
+  "OnLeave",
+  "OnMouseDown",
+  "OnMouseUp",
+}
+
+local function clearInteractiveScripts(frame)
+  if type(frame.SetScript) ~= "function" then
+    return
+  end
+  for _, name in ipairs(POOLED_INTERACTIVE_SCRIPTS) do
+    frame:SetScript(name, nil)
+  end
+  if frame._wmPoolFrameType == "Button" then
+    frame:SetScript("OnDoubleClick", nil)
+    frame:SetScript("OnClick", nil)
+  end
+end
+local function clearReactionState(frame)
+  local reactionFrame = frame._reactionFrame
+  if reactionFrame then
+    if reactionFrame._reactionTooltipOwned and _G.GameTooltip and type(_G.GameTooltip.Hide) == "function" then
+      _G.GameTooltip:Hide()
+    end
+    reactionFrame._reactionTooltipOwned = nil
+    clearInteractiveScripts(reactionFrame)
+    if reactionFrame.Hide then
+      reactionFrame:Hide()
+    end
+    if reactionFrame.ClearAllPoints then
+      reactionFrame:ClearAllPoints()
+    end
+  end
+  local texture = frame._reactionTexture
+  if texture then
+    if texture.SetTexture then
+      texture:SetTexture(nil)
+    end
+    if texture.SetTexCoord then
+      texture:SetTexCoord(0, 1, 0, 1)
+    end
+    if texture.Hide then
+      texture:Hide()
+    end
+  end
+  frame._reactionKey = nil
+  if reactionFrame then
+    reactionFrame._wmReactionKey = nil
+  end
+
+  local pickerFrame = type(ReactionPicker.GetFrame) == "function" and ReactionPicker.GetFrame() or nil
+  if pickerFrame and pickerFrame._anchor == frame and type(ReactionPicker.Close) == "function" then
+    ReactionPicker.Close()
+  end
+end
+
+local function clearBindingState(frame)
+  frame._wmMessage = nil
+  frame._wmOnRevealCensored = nil
+  frame._wmOnReact = nil
+  frame._wmCanReact = nil
+  frame._wmOnReply = nil
+  frame._wmCanReply = nil
+  frame._wmOnIgnoreSender = nil
+  frame._wmCanIgnoreSender = nil
+  frame._wmPersistentFactory = nil
+  frame._wmOpenedOnMouseDown = nil
+  frame._wmPlayerMenuMessage = nil
+  frame._wmPlayerMenuOpener = nil
+
+  local menuOptions = frame._wmContextMenuOptions
+  if menuOptions then
+    menuOptions.message = nil
+    menuOptions.onReact = nil
+    menuOptions.canReact = nil
+    menuOptions.onReply = nil
+    menuOptions.onIgnoreSender = nil
+    menuOptions.factory = nil
+  end
+  local copyButton = frame._copyButton
+  if copyButton then
+    copyButton._wmCopyMessage = nil
+    copyButton._wmCopyText = nil
+  end
+end
+
+local function releaseFrame(free, f)
+  FramePool.hideAllRegions(f)
+  clearInteractiveScripts(f)
+  clearReactionState(f)
+  clearBindingState(f)
+  if f.SetAlpha then
+    f:SetAlpha(1)
+  end
+  if f.Hide then
+    f:Hide()
+  end
+  if f.ClearAllPoints then
+    f:ClearAllPoints()
+  end
+  table.insert(free, f)
+end
+
+-- Bumped on every releaseAll, so callers holding on to active frames can tell
+-- they were taken back.
+function FramePool.generation(contentFrame)
+  return contentFrame._wmPoolGeneration or 0
+end
+
+function FramePool.releaseAll(contentFrame)
+  local active = contentFrame._activeFrames
+  local free = contentFrame._freeFrames
+  for i = #active, 1, -1 do
+    releaseFrame(free, active[i])
+    active[i] = nil
+  end
+  contentFrame._wmPoolGeneration = FramePool.generation(contentFrame) + 1
+end
+
+-- Releases every active frame whose _wmKeepMark is not keepMark and empties
+-- the active list; the caller re-adds the kept frames in its own order.
+function FramePool.releaseUnmarked(contentFrame, keepMark)
+  local active = contentFrame._activeFrames
+  local free = contentFrame._freeFrames
+  for i = #active, 1, -1 do
+    local f = active[i]
+    if f._wmKeepMark ~= keepMark then
+      releaseFrame(free, f)
+    end
+    active[i] = nil
+  end
+end
+
+ns.ChatBubbleFramePool = FramePool
+return FramePool

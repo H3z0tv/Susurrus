@@ -1,0 +1,65 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local Builder = ns.ThemePresetsBuilder or require("Susurrus.UI.Theme.Presets.Builder")
+local rgb = Builder.Rgb
+local withAlpha = Builder.WithAlpha
+local makeDividerRoles = Builder.MakeDividerRoles
+
+local textSecondaryRgb = rgb(1.0, 1.0, 1.0)
+
+local roles = {
+  surface_primary = { 0.03, 0.03, 0.03, 0.98 },
+  surface_secondary = { 0.06, 0.06, 0.07, 0.80 },
+  surface_chrome = { 0.05, 0.05, 0.06, 0.90 },
+  contact_hover = { 1.0, 1.0, 1.0, 0.05 },
+  contact_selected = { 0.34, 0.51, 0.90, 0.16 },
+  contact_selected_hover = { 0.34, 0.51, 0.90, 0.22 },
+  -- Pinned reads through ordering and the hover pin, not a colour.
+  contact_pinned = { 0.34, 0.51, 0.90, 0.05 },
+  bubble_in = { 0.16, 0.17, 0.20, 0.95 },
+  bubble_out = { 0.13, 0.16, 0.20, 0.88 },
+  bubble_system = { 0.10, 0.10, 0.12, 0.78 },
+  input_bg = { 0.09, 0.10, 0.12, 1.0 },
+  text_primary = { 0.96, 0.96, 0.96, 1.0 },
+  text_soft = { 0.84, 0.86, 0.90, 1.0 },
+  text_secondary = withAlpha(textSecondaryRgb, 0.55),
+  text_emphasis = { 0.99, 0.99, 1.0, 1.0 },
+  text_system = { 0.78, 0.80, 0.86, 1.0 },
+  text_timestamp = { 1.0, 1.0, 1.0, 0.40 },
+  accent = { 0.34, 0.51, 0.90, 1.0 },
+  toggle_on = { 0.34, 0.51, 0.90, 1.0 },
+  button_fill_hover = { 0.30, 0.32, 0.38, 1.0 },
+  status_online = { 0.30, 0.82, 0.40, 1.0 },
+  status_offline = { 0.45, 0.45, 0.50, 1.0 },
+  status_away = { 0.90, 0.72, 0.20, 1.0 },
+  status_dnd = { 0.85, 0.25, 0.25, 1.0 },
+  scrollbar = { 1.0, 1.0, 1.0, 0.14 },
+  scrollbar_hover = { 1.0, 1.0, 1.0, 0.32 },
+  option_bg = { 0.09, 0.09, 0.10, 0.92 },
+  toggle_off = { 0.22, 0.23, 0.27, 0.96 },
+  composer_pane_border = { 1.0, 1.0, 1.0, 0.08 },
+  window_border = { 1.0, 1.0, 1.0, 0.10 },
+  danger_bg = { 0.45, 0.12, 0.12, 0.80 },
+  danger_hover = { 0.55, 0.16, 0.16, 0.90 },
+  action_icon = withAlpha(textSecondaryRgb, 0.45),
+  toggle_icon_bg = { 0.15, 0.17, 0.22, 1.0 },
+  toggle_icon_ring = { 0.34, 0.51, 0.90, 0.55 },
+  toggle_icon_glyph = { 0.96, 0.96, 0.96, 1.0 },
+}
+
+-- White-plus-alpha hairlines read as neutral on any surface tone.
+local dividers = makeDividerRoles(rgb(1.0, 1.0, 1.0), 0.08, 0.10, rgb(1.0, 1.0, 1.0), 0.16)
+for k, v in pairs(dividers) do
+  roles[k] = v
+end
+
+-- Text on fills (sent bubbles, selected buttons) matches the emphasis colour.
+roles.text_bright = roles.text_emphasis
+
+local data = { key = "elvui_dark", roles = roles }
+
+ns.ThemePresetDataElvuiDark = data
+return data

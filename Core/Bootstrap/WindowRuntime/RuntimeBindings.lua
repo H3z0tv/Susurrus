@@ -1,0 +1,102 @@
+local addonName, ns = ...
+if type(ns) ~= "table" then
+  ns = {}
+end
+
+local ConversationDrafts = ns.ConversationDrafts or require("Susurrus.Model.ConversationDrafts")
+local ContactInfo = ns.ContactInfo or require("Susurrus.Model.ContactInfo")
+local ChatCover = ns.BootstrapWindowCoordinatorChatCover or require("Susurrus.Core.Bootstrap.WindowCoordinator.ChatCover")
+local PanelRegistry = ns.BootstrapWindowRuntimePanelRegistry or require("Susurrus.Core.Bootstrap.WindowRuntime.PanelRegistry")
+
+local RuntimeBindings = {}
+
+-- Text handed over from Blizzard chat becomes the active conversation's
+-- draft too, so it survives even when the window is not built yet.
+local function buildComposerTextSetter(runtime, getWindow)
+  return function(text)
+    ConversationDrafts.Set(runtime.store, runtime.activeConversationKey, text)
+    local window = getWindow()
+    if window and window.composer and window.composer.input and window.composer.input.SetText then
+      window.composer.input:SetText(text or "")
+    end
+  end
+end
+
+function RuntimeBindings.Apply(options)
+  options = options or {}
+
+  local runtime = options.runtime or {}
+  local controller = options.controller or {}
+  local icon = options.icon
+  local getWindow = options.getWindow or function()
+    return nil
+  end
+  local getIcon = options.getIcon or function()
+    return icon
+  end
+  local isWindowVisible = options.isWindowVisible or function()
+    return false
+  end
+  local buildContacts = options.buildContacts or function()
+    return {}
+  end
+  local ensureWindow = options.ensureWindow or function() end
+  local refreshWindow = options.refreshWindow or function() end
+  local selectConversation = options.selectConversation or function() end
+  local setWindowVisible = options.setWindowVisible or function() end
+  local toggle = options.toggle or function() end
+  local startConversation = options.startConversation or function()
+    return false
+  end
+  local getWidgetIcon = options.getWidgetIcon or function()
+    return nil
+  end
+  local updateIconSurfaces = options.updateIconSurfaces or function() end
+
+  local setComposerText = buildComposerTextSetter(runtime, getWindow)
+
+  controller.getWindow = getWindow
+  controller.getIcon = getIcon
+  controller.isWindowVisible = isWindowVisible
+  controller.buildContacts = buildContacts
+  controller.ensureWindow = ensureWindow
+  controller.refreshWindow = refreshWindow
+  controller.selectConversation = selectConversation
+  controller.setWindowVisible = setWindowVisible
+  controller.setComposerText = setComposerText
+  controller.toggle = toggle
+
+  runtime.onConversationRemoved = function(conversationKey)
+    local window = getWindow()
+    if window and window.composer and window.composer.forgetReply then
+      window.composer.forgetReply(conversationKey)
+    end
+  end
+
+  -- A panel or the options pane over the window leaves the chat unseen.
+  runtime.isConversationOpen = function(conversationKey)
+    return controller.isWindowVisible() and runtime.activeConversationKey == conversationKey and not ChatCover.IsCovered(getWindow())
+  end
+
+  runtime.icon = icon
+  runtime.toggle = controller.toggle
+  runtime.refreshWindow = controller.refreshWindow
+  runtime.ensureWindow = controller.ensureWindow
+  runtime.isWindowVisible = controller.isWindowVisible
+  runtime.setWindowVisible = controller.setWindowVisible
+  runtime.setComposerText = controller.setComposerText
+  runtime.startConversation = startConversation
+  runtime.externalPreview = options.externalPreview
+  runtime.getWidgetIcon = getWidgetIcon
+  runtime.updateIconSurfaces = updateIconSurfaces
+  runtime.panelRegistry = PanelRegistry.New()
+  runtime.contactInfo = ContactInfo.New()
+
+  return {
+    setComposerText = setComposerText,
+  }
+end
+
+ns.BootstrapWindowRuntimeRuntimeBindings = RuntimeBindings
+
+return RuntimeBindings
