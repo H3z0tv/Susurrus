@@ -47,4 +47,4 @@ Found a bug or have an idea? Open an issue on this repository. Please include yo
 
 ### License
 
-By H3Z0. Licensed under GPL-3.0, see [LICENSE](LICENSE). See `NOTICE.txt` and the license files in `Media` for included parts and assets.
+By H3Z0. Licensed under GPL-3.0, see [LICENSE](LICENSE).
