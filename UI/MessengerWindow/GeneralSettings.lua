@@ -11,6 +11,7 @@ local createOptionButton = UIHelpers.createOptionButton
 
 local ButtonSelector = ns.MessengerWindowButtonSelector or require("Susurrus.UI.MessengerWindow.AppearanceSettings.ButtonSelector")
 local Localization = ns.Localization or require("Susurrus.Locale.Localization")
+local HistoryTransferDialog = ns.HistoryTransferDialog or require("Susurrus.UI.Shared.HistoryTransferDialog")
 
 local GeneralSettings = {}
 
@@ -216,6 +217,91 @@ function GeneralSettings.Create(factory, parent, config, options)
   )
   languageSelector.row:SetPoint("TOPLEFT", timeSourceSelector.row, "BOTTOMLEFT", 0, -Theme.LAYOUT.SETTINGS_SLIDER_ROW_SPACING)
 
+  local syncSection = SettingsControls.CreateSectionLabel(frame, text("Sync Between Game Versions"))
+  syncSection.region:SetPoint("TOPLEFT", languageSelector.row, "BOTTOMLEFT", 0, -Theme.LAYOUT.SETTINGS_SLIDER_ROW_SPACING)
+
+  local syncHint = frame:CreateFontString(nil, "OVERLAY", Theme.FONTS.contact_preview)
+  syncHint:SetJustifyH("LEFT")
+  syncHint:SetJustifyV("TOP")
+  syncHint:SetWordWrap(true)
+  syncHint:SetWidth(Theme.LAYOUT.SETTINGS_CONTROL_WIDTH)
+  syncHint:SetPoint("TOPLEFT", syncSection.region, "BOTTOMLEFT", 0, -8)
+  syncHint:SetText(text("Copy your chats from one game version (Retail, Forever, Classic...) to another. Export on one, then paste the text into Import on the other. Nothing gets duplicated."))
+
+  local syncButtonOptions = { height = Theme.LAYOUT.OPTION_BUTTON_HEIGHT, width = Theme.LAYOUT.SETTINGS_CONTROL_WIDTH, ghost = true }
+  local exportButton = panel:bind(
+    createOptionButton(factory, frame, text("Export History"), SettingsControls.OptionButtonColors(Theme), syncButtonOptions),
+    { type = "optionButton" }
+  )
+  exportButton:SetPoint("TOPLEFT", syncHint, "BOTTOMLEFT", 0, -10)
+
+  local importButton = panel:bind(
+    createOptionButton(factory, frame, text("Import History"), SettingsControls.OptionButtonColors(Theme), syncButtonOptions),
+    { type = "optionButton" }
+  )
+  importButton:SetPoint("TOPLEFT", exportButton, "BOTTOMLEFT", 0, -8)
+
+  local function historyTransfer()
+    return ns.HistoryTransfer or require("Susurrus.Persistence.HistoryTransfer")
+  end
+
+  exportButton:SetScript("OnClick", function()
+    local constants = ns.Constants or require("Susurrus.Core.Constants")
+    local flavor = ns.FlavorCompat
+    local exported, count, trimmed = historyTransfer().Export(_G.SusurrusDB, {
+      game = flavor and flavor.name or nil,
+      addonVersion = constants.VERSION,
+    })
+    local notice = nil
+    local noticeIsError = false
+    if exported == nil then
+      notice = count == "empty" and text("Nothing to export yet. Only Battle.net and character whisper chats are synced.")
+        or text("Could not create the export.")
+      noticeIsError = true
+    elseif trimmed then
+      notice = text("Your history is very large, so only the newest 50 messages of each chat are included.")
+    end
+    HistoryTransferDialog.Show(factory, {
+      mode = "export",
+      title = text("Export History"),
+      instruction = text("Press Ctrl+C to copy this text, then paste it into Import History on the other game version."),
+      close = text("Close"),
+      text = exported or "",
+      notice = notice,
+      noticeIsError = noticeIsError,
+    })
+  end)
+
+  importButton:SetScript("OnClick", function()
+    HistoryTransferDialog.Show(factory, {
+      mode = "import",
+      title = text("Import History"),
+      instruction = text("Paste the text from Export History here, then press Import. Messages you already have are skipped."),
+      action = text("Import"),
+      close = text("Close"),
+      onAction = function(pasted)
+        local ok, result = historyTransfer().Import(_G.SusurrusDB, pasted)
+        if not ok then
+          return false, text("That text is not a Susurrus export. Copy it again from Export History.")
+        end
+        local message
+        if result.added == 0 then
+          message = text("Nothing new to import. Every message is already here.")
+        else
+          message = string.format(text("Imported %d new messages in %d chats. Reloading the interface..."), result.added, result.conversations)
+          local timer = _G.C_Timer
+          if type(timer) == "table" and type(timer.After) == "function" and type(_G.ReloadUI) == "function" then
+            timer.After(2.5, _G.ReloadUI)
+          end
+        end
+        if result.expired > 0 then
+          message = message .. "\n" .. string.format(text("%d older messages were skipped because of your Message Retention setting."), result.expired)
+        end
+        return true, message
+      end,
+    })
+  end)
+
   local resetButton = panel:bind(
     createOptionButton(
       factory,
@@ -226,7 +312,7 @@ function GeneralSettings.Create(factory, parent, config, options)
     ),
     { type = "optionButton" }
   )
-  resetButton:SetPoint("TOPLEFT", languageSelector.row, "BOTTOMLEFT", 0, -Theme.LAYOUT.SETTINGS_SLIDER_ROW_SPACING)
+  resetButton:SetPoint("TOPLEFT", importButton, "BOTTOMLEFT", 0, -Theme.LAYOUT.SETTINGS_SLIDER_ROW_SPACING)
 
   resetButton:SetScript("OnClick", function()
     panel:reset(onChange)
@@ -251,17 +337,32 @@ function GeneralSettings.Create(factory, parent, config, options)
     languageSelector.label:SetText(text("Interface Language"))
     languageSelector.setOptionsList(Localization.LanguageOptions(interfaceLanguage))
     languageSelector.setSelected(interfaceLanguage)
+    syncSection.label:SetText(text("Sync Between Game Versions"))
+    syncHint:SetText(text("Copy your chats from one game version (Retail, Forever, Classic...) to another. Export on one, then paste the text into Import on the other. Nothing gets duplicated."))
+    exportButton.label:SetText(text("Export History"))
+    importButton.label:SetText(text("Import History"))
     resetButton.label:SetText(text("Reset to Defaults"))
+  end
+
+  local creditLabel = frame:CreateFontString(nil, "OVERLAY", Theme.FONTS.system_text)
+  creditLabel:SetPoint("TOPLEFT", resetButton, "BOTTOMLEFT", 0, -16)
+  creditLabel:SetJustifyH("LEFT")
+  do
+    local constants = ns.Constants or require("Susurrus.Core.Constants")
+    creditLabel:SetText(constants.CREDIT .. "  •  v" .. constants.VERSION)
   end
 
   local bottomSpacer = factory.CreateFrame("Frame", nil, frame)
   bottomSpacer:SetSize(1, PADDING)
-  bottomSpacer:SetPoint("TOPLEFT", resetButton, "BOTTOMLEFT", 0, 0)
+  bottomSpacer:SetPoint("TOPLEFT", creditLabel, "BOTTOMLEFT", 0, 0)
   frame._wmBottomMarker = bottomSpacer
 
   local function refreshTheme(activeTheme)
     activeTheme = activeTheme or Theme
     header.refreshTheme(activeTheme)
+    UIHelpers.setTextColor(creditLabel, (activeTheme.COLORS or Theme.COLORS).text_secondary)
+    UIHelpers.setTextColor(syncHint, (activeTheme.COLORS or Theme.COLORS).text_secondary)
+    syncSection.refreshTheme(activeTheme)
     privacySection.refreshTheme(activeTheme)
     timeSection.refreshTheme(activeTheme)
     panel:refreshTheme(activeTheme)
@@ -278,6 +379,8 @@ function GeneralSettings.Create(factory, parent, config, options)
     header.refreshLayout(effective)
     privacySection.refreshLayout(effective)
     timeSection.refreshLayout(effective)
+    syncSection.refreshLayout(effective)
+    syncHint:SetWidth(effective)
     panel:refreshLayout(effective)
   end
 

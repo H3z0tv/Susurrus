@@ -27,6 +27,7 @@ local MULTI_SCRIPT_LANGUAGES = {
   zhCN = true,
   zhTW = true,
   ruRU = true,
+  bgBG = true,
 }
 
 -- Probed in order. The first FontObject that exists wins. GameTooltipText

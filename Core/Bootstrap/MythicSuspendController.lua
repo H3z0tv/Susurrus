@@ -33,6 +33,8 @@ function MythicSuspendController.Attach(runtime, deps)
   runtime.suspend = function()
     runtime.messagingNotice = deps.mythicPauseNotice or L(DEFAULT_MYTHIC_PAUSE_NOTICE_KEY)
     Bootstrap._wasVisibleBeforeMythic = isWindowVisible()
+    -- Set before hiding: the window closes without a fade here.
+    _G._wmSuspended = true
     setWindowVisible(false)
     if Bootstrap.unregisterChatFilters then
       Bootstrap.unregisterChatFilters()

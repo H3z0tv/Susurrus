@@ -44,16 +44,15 @@ function Hud.Resolve(style)
   return nextStyle
 end
 
--- The style new installs and Reset to Defaults use: Modern where the game
--- ships its templates (Retail and Forever), Off on the Classic flavors.
+-- The style new installs and Reset to Defaults use: Off, the messenger's
+-- own window style.
 function Hud.DefaultStyle()
-  return (FlavorCompat.isRetail or FlavorCompat.isForever) and "retail" or "off"
+  return "off"
 end
 
--- The theme that goes with DefaultStyle: Azeroth with Modern, as when a
--- player turns the HUD on from Off.
+-- The theme that goes with DefaultStyle: Midnight.
 function Hud.DefaultPreset()
-  return Hud.DefaultStyle() == "off" and Presets.WOW_DEFAULT or Presets.WOW_NATIVE
+  return Presets.WOW_DEFAULT
 end
 
 function Hud.Configure(style)

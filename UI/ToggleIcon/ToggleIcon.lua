@@ -17,10 +17,16 @@ local IconClick = ns.ToggleIconIconClick or require("Susurrus.UI.ToggleIcon.Icon
 local Localization = ns.Localization or require("Susurrus.Locale.Localization")
 local KeybindHints = ns.KeybindHints or require("Susurrus.UI.Shared.KeybindHints")
 local UnreadSummary = ns.UnreadSummary or require("Susurrus.UI.Shared.UnreadSummary")
-local ADDON_ICON_TEXTURE = "Interface\\AddOns\\Susurrus\\Media\\icon.png"
+local ADDON_ICON_TEXTURE = "Interface\\AddOns\\Susurrus\\Media\\widget_icon.png"
 
 local CHAT_ICON_RATIO = 0.9 -- chat icon scale factor vs ICON_SIZE
+local BORDERLESS_ICON_RATIO = 1.0 -- no background: the icon fills the widget
+local GLOW_TEXTURE = "Interface\\AddOns\\Susurrus\\Media\\inner-glow.png"
+local GLOW_PAD_RATIO = 0.3 -- how far the accent halo reaches past the icon
+local GLOW_PULSE_SECONDS = 0.9
 local HOVER_ICON_COLOR = { 1, 1, 1, 0.65 }
+local HOVER_ICON_COLOR_BORDERLESS = { 1, 1, 1, 0.8 }
+local WHITE = { 1, 1, 1, 1 }
 local LOCK_GLYPH_RATIO = 0.45 -- lock indicator size vs ICON_SIZE
 local LOCK_GLYPH_TEXTURE = "Interface\\LFGFrame\\UI-LFG-ICON-LOCK"
 local BADGE_LEVEL_OFFSET = 10 -- above the pulse glow (parent + 5)
@@ -38,6 +44,14 @@ function ToggleIcon.Create(factory, options)
   local y = state.y or 0
 
   local ICON_SIZE = options.iconSize or Theme.LAYOUT.ICON_SIZE
+  local currentSize = ICON_SIZE
+
+  -- "Show icon background": the round background and ring. Off (the default)
+  -- shows just the icon.
+  local getShowIconBackground = options.getShowIconBackground
+  local function showBackground()
+    return type(getShowIconBackground) == "function" and getShowIconBackground() == true
+  end
 
   local frame = factory.CreateFrame("Button", "SusurrusToggleIcon", parent)
   frame:SetSize(ICON_SIZE, ICON_SIZE)
@@ -66,6 +80,10 @@ function ToggleIcon.Create(factory, options)
     return { a[1], a[2], a[3], 0.3 }
   end
   local function resolveGlyphColor()
+    if not showBackground() then
+      -- The artwork keeps its own colours; the glyph tint is for the ring look.
+      return WHITE
+    end
     return Theme.COLORS.toggle_icon_glyph or Theme.COLORS.text_primary
   end
 
@@ -90,6 +108,61 @@ function ToggleIcon.Create(factory, options)
   applyVertexColor(chatIcon, resolveGlyphColor())
 
   local label = chatIcon -- reference kept for return table
+
+  -- Accent halo behind the icon while whispers are unread.
+  local backGlow = frame:CreateTexture(nil, "BACKGROUND")
+  backGlow:SetTexture(GLOW_TEXTURE)
+  if backGlow.SetBlendMode then
+    backGlow:SetBlendMode("ADD")
+  end
+  local function paintBackGlow()
+    local accent = Theme.COLORS.accent or { 1, 1, 1, 1 }
+    applyVertexColor(backGlow, { accent[1], accent[2], accent[3], 0.9 })
+  end
+  paintBackGlow()
+  backGlow:Hide()
+
+  local backGlowAnim = nil
+  if backGlow.CreateAnimationGroup then
+    backGlowAnim = backGlow:CreateAnimationGroup()
+    backGlowAnim:SetLooping("BOUNCE")
+    local fade = backGlowAnim:CreateAnimation("Alpha")
+    fade:SetFromAlpha(1)
+    fade:SetToAlpha(0.45)
+    fade:SetDuration(GLOW_PULSE_SECONDS)
+    fade:SetOrder(1)
+  end
+
+  local function setBackGlow(active, animate)
+    if not active then
+      if backGlowAnim then
+        backGlowAnim:Stop()
+      end
+      backGlow:Hide()
+      return
+    end
+    backGlow:Show()
+    if backGlowAnim then
+      if animate then
+        if not backGlowAnim:IsPlaying() then
+          backGlowAnim:Play()
+        end
+      else
+        backGlowAnim:Stop()
+      end
+    end
+  end
+
+  -- Icon and halo sizes follow the widget size and the background setting.
+  local function layoutIcon(size)
+    local ratio = showBackground() and CHAT_ICON_RATIO or BORDERLESS_ICON_RATIO
+    chatIcon:SetSize(math.floor(size * ratio), math.floor(size * ratio))
+    local pad = math.floor(size * GLOW_PAD_RATIO)
+    backGlow:ClearAllPoints()
+    backGlow:SetPoint("TOPLEFT", frame, "TOPLEFT", -pad, pad)
+    backGlow:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", pad, -pad)
+  end
+  layoutIcon(ICON_SIZE)
 
   -- Glow pulse for unread messages (CraftScan-style looping animation)
   local pulseGlow = PulseGlow.Create(factory, frame, {
@@ -210,6 +283,13 @@ function ToggleIcon.Create(factory, options)
 
   local desaturation = Desaturation.Create({
     textures = { chatIcon = chatIcon, background = background, border = border },
+    getDesatIconColor = function()
+      -- Borderless: a plain grey icon, readable on its own.
+      if not showBackground() then
+        return { 0.85, 0.85, 0.85, 1 }
+      end
+      return nil
+    end,
     resolveColors = {
       chatIcon = resolveGlyphColor,
       background = resolveBgColor,
@@ -235,6 +315,7 @@ function ToggleIcon.Create(factory, options)
     pulseState.setUnreadWants((tonumber(pulseCount or count) or 0) > 0 and allowPulse and showBadge)
 
     desaturation.update(unreadCount)
+    setBackGlow(unreadCount > 0, allowPulse)
   end
 
   -- Hover glow effect
@@ -245,7 +326,7 @@ function ToggleIcon.Create(factory, options)
       refreshTransparency()
       if not desaturation.isActive() then
         applyVertexColor(background, Theme.COLORS.send_button_hover)
-        applyVertexColor(chatIcon, HOVER_ICON_COLOR)
+        applyVertexColor(chatIcon, showBackground() and HOVER_ICON_COLOR or HOVER_ICON_COLOR_BORDERLESS)
       end
       if _G.GameTooltip and _G.GameTooltip.SetOwner then
         _G.GameTooltip:SetOwner(frame, "ANCHOR_BOTTOM")
@@ -302,7 +383,18 @@ function ToggleIcon.Create(factory, options)
 
   local refreshDesaturation = desaturation.refresh
 
+  -- Applies the "Show icon background" setting.
+  local function refreshBackground()
+    local on = showBackground()
+    background:SetShown(on)
+    border:SetShown(on)
+    layoutIcon(currentSize)
+    desaturation.refreshOriginalColors()
+    desaturation.refresh()
+  end
+
   local function refreshTheme()
+    paintBackGlow()
     badgeResult.paint()
     desaturation.refreshOriginalColors()
     pulseGlow.applyTheme(Theme)
@@ -312,8 +404,9 @@ function ToggleIcon.Create(factory, options)
 
   local function applyIconSize(newSize)
     newSize = tonumber(newSize) or ICON_SIZE
+    currentSize = newSize
     frame:SetSize(newSize, newSize)
-    chatIcon:SetSize(math.floor(newSize * CHAT_ICON_RATIO), math.floor(newSize * CHAT_ICON_RATIO))
+    layoutIcon(newSize)
     if border.SetPoint and border.ClearAllPoints then
       border:ClearAllPoints()
       border:SetPoint("TOPLEFT", frame, "TOPLEFT", -1, 1)
@@ -322,6 +415,7 @@ function ToggleIcon.Create(factory, options)
     applyLockGlyphLayout(newSize)
   end
 
+  refreshBackground()
   setUnreadCount(options.unreadCount)
   setIncomingPreview(options.previewSenderName, options.previewMessageText, options.previewClassTag)
   refreshTheme()
@@ -354,6 +448,7 @@ function ToggleIcon.Create(factory, options)
     applyPreviewPosition = incomingPreview.applyPreviewPosition,
     applyIconSize = applyIconSize,
     refreshDesaturation = refreshDesaturation,
+    refreshBackground = refreshBackground,
     refreshTheme = refreshTheme,
     lockGlyph = lockGlyph,
     refreshLockGlyph = refreshLockGlyph,

@@ -91,7 +91,7 @@ local function applyIncomingEffects(runtime, result)
     if
       shouldAlert
       and settings
-      and settings.autoOpenIncoming ~= false
+      and settings.autoOpenIncoming == true
       and runtime.onAutoOpen
       and type(_G.InCombatLockdown) == "function"
       and not _G.InCombatLockdown()

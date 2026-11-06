@@ -20,6 +20,7 @@ local supportedLanguages = {
   koKR = true,
   zhCN = true,
   zhTW = true,
+  bgBG = true,
 }
 
 local configuredLanguage = AUTO_LANGUAGE
@@ -59,6 +60,7 @@ local catalogs = {
   koKR = loadCatalog("koKR", "Susurrus.Locale.koKR"),
   zhCN = loadCatalog("zhCN", "Susurrus.Locale.zhCN"),
   zhTW = loadCatalog("zhTW", "Susurrus.Locale.zhTW"),
+  bgBG = loadCatalog("bgBG", "Susurrus.Locale.bgBG"),
 }
 
 local function normalizeLanguage(language)
@@ -118,6 +120,7 @@ local LANGUAGE_PICKER_ORDER = {
   { key = "frFR", label = "Français", tooltipKey = "Use French for the addon's interface." },
   { key = "itIT", label = "Italiano", tooltipKey = "Use Italian for the addon's interface." },
   { key = "ptBR", label = "Português", tooltipKey = "Use Portuguese (Brazil) for the addon's interface." },
+  { key = "bgBG", label = "Български", tooltipKey = "Use Bulgarian for the addon's interface." },
   { key = "ruRU", label = "Русский", tooltipKey = "Use Russian for the addon's interface." },
   { key = "koKR", label = "한국어", tooltipKey = "Use Korean for the addon's interface." },
   { key = "zhCN", label = "简体中文", tooltipKey = "Use Chinese (Simplified) for the addon's interface." },

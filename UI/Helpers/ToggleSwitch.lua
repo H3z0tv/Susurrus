@@ -5,6 +5,7 @@ end
 
 local Base = ns.UIHelpersBase or require("Susurrus.UI.Helpers.Base")
 local Shapes = ns.UIHelpersShapes or require("Susurrus.UI.Helpers.Shapes")
+local Motion = ns.Motion or require("Susurrus.Util.Motion")
 
 -- Modern on/off switch: pill track (rounded background sized so the corner
 -- radius is half the height) and a round knob that sits left when off and
@@ -37,17 +38,74 @@ function ToggleSwitch.Attach(button)
   return { track = track, knob = knob }
 end
 
--- colors: { on, off, knob }
-function ToggleSwitch.Paint(switch, button, enabled, colors)
-  setShown(switch, true)
-  switch.track.setColor(enabled and colors.on or colors.off)
-  Base.applyVertexColor(switch.knob, colors.knob)
+-- Distance from the track's left edge to the knob's left edge.
+local function knobOffset(button, enabled)
+  local width = type(button.GetWidth) == "function" and button:GetWidth() or nil
+  if type(width) ~= "number" or width <= 0 then
+    width = ToggleSwitch.TRACK_WIDTH
+  end
+  return enabled and (width - ToggleSwitch.KNOB_SIZE - ToggleSwitch.KNOB_INSET) or ToggleSwitch.KNOB_INSET
+end
+
+local function placeKnob(switch, button, enabled)
   switch.knob:ClearAllPoints()
   if enabled then
     switch.knob:SetPoint("RIGHT", button, "RIGHT", -ToggleSwitch.KNOB_INSET, 0)
   else
     switch.knob:SetPoint("LEFT", button, "LEFT", ToggleSwitch.KNOB_INSET, 0)
   end
+end
+
+local function stopSlide(switch)
+  local animator = switch.animator
+  if animator and animator.SetScript then
+    animator:SetScript("OnUpdate", nil)
+  end
+end
+
+-- Slides the knob from its last offset to the new one, then re-anchors it
+-- the normal way so resizes keep working.
+local function slideKnob(switch, button, enabled, fromOffset, toOffset)
+  local createFrame = _G.CreateFrame
+  if type(createFrame) ~= "function" then
+    return false
+  end
+  if switch.animator == nil then
+    switch.animator = createFrame("Frame", nil, button)
+  end
+  local animator = switch.animator
+  local elapsed = 0
+  animator:SetScript("OnUpdate", function(_, step)
+    elapsed = elapsed + (step or 0)
+    local progress = elapsed / Motion.SLIDE_DURATION
+    if progress >= 1 then
+      stopSlide(switch)
+      placeKnob(switch, button, enabled)
+      return
+    end
+    local offset = fromOffset + (toOffset - fromOffset) * Motion.EaseOut(progress)
+    switch.knob:ClearAllPoints()
+    switch.knob:SetPoint("LEFT", button, "LEFT", offset, 0)
+  end)
+  return true
+end
+
+-- colors: { on, off, knob }
+function ToggleSwitch.Paint(switch, button, enabled, colors)
+  setShown(switch, true)
+  switch.track.setColor(enabled and colors.on or colors.off)
+  Base.applyVertexColor(switch.knob, colors.knob)
+
+  local target = knobOffset(button, enabled)
+  local previous = switch.knobOffset
+  switch.knobOffset = target
+  stopSlide(switch)
+
+  local visible = type(button.IsVisible) == "function" and button:IsVisible()
+  if previous ~= nil and previous ~= target and visible and Motion.Enabled() and slideKnob(switch, button, enabled, previous, target) then
+    return
+  end
+  placeKnob(switch, button, enabled)
 end
 
 ns.UIHelpersToggleSwitch = ToggleSwitch

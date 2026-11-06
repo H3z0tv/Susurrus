@@ -6,6 +6,7 @@ end
 local Theme = ns.Theme or require("Susurrus.UI.Theme")
 local UIHelpers = ns.UIHelpers or require("Susurrus.UI.Helpers")
 local applyVertexColor = UIHelpers.applyVertexColor
+local Motion = ns.Motion or require("Susurrus.Util.Motion")
 
 -- Circular unread counter shared by the widget, minimap icon, contact rows
 -- and Whispers/Groups tabs. Callers own anchoring and frame level.
@@ -70,8 +71,11 @@ function Badge.Create(factory, parent, opts)
     paint()
   end
 
+  local lastCount = 0
   local function setCount(count)
     local n = tonumber(count) or 0
+    local increased = n > lastCount
+    lastCount = n
     if n <= 0 then
       label:SetText("")
       frame:Hide()
@@ -79,6 +83,9 @@ function Badge.Create(factory, parent, opts)
     end
     label:SetText(n > OVERFLOW and (OVERFLOW .. "+") or tostring(n))
     frame:Show()
+    if increased then
+      Motion.FadeIn(frame, 0.3)
+    end
   end
 
   paint()

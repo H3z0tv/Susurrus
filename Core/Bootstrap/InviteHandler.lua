@@ -13,6 +13,9 @@ local InviteHandler = {}
 InviteHandler.INVITE_TEXT =
   "Hey! I use Susurrus Chat for whispers: messenger window, history, unread badges, reactions, typing/seen. Get it and we get all of it between us."
 
+-- Appended after localization so the link is never altered by a translation.
+InviteHandler.DOWNLOAD_URL = "https://www.curseforge.com/wow/addons/susurrus"
+
 -- "Show invite link" setting: on unless explicitly turned off.
 function InviteHandler.IsEnabled(runtime)
   local settings = type(runtime) == "table" and runtime.accountState and runtime.accountState.settings
@@ -47,7 +50,7 @@ function InviteHandler.HandleInvite(runtime, selectedContact, refreshWindow)
     conversationID = selectedContact.conversationID,
     guid = selectedContact.guid,
     gameAccountName = selectedContact.gameAccountName,
-    text = Localization.Text(InviteHandler.INVITE_TEXT),
+    text = Localization.Text(InviteHandler.INVITE_TEXT) .. " " .. InviteHandler.DOWNLOAD_URL,
   }, refresh)
 
   if accepted then

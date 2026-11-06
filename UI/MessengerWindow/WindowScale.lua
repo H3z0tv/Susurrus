@@ -7,7 +7,7 @@ local WindowScale = {
   MIN = 0.75,
   MAX = 1.50,
   STEP = 0.05,
-  DEFAULT = 1.00,
+  DEFAULT = 1.10,
 }
 local ROUNDING_TOLERANCE = 1e-12
 

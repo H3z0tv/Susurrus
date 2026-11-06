@@ -270,6 +270,9 @@ function SettingsHandler.Create(options)
         minimap.refreshDesaturation()
       end
     end
+    if key == "showIconBackground" and icon and icon.refreshBackground then
+      icon.refreshBackground()
+    end
     if key == "widgetTransparency" and icon and icon.refreshTransparency then
       icon.refreshTransparency()
     end

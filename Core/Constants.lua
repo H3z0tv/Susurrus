@@ -4,7 +4,9 @@ if type(ns) ~= "table" then
 end
 
 local Constants = {
-  VERSION = "v2.1.1",
+  VERSION = "0.2.6",
+  AUTHOR = "H3z0",
+  CREDIT = "Susurrus Chat by H3z0",
 
   LIVE_EVENT_NAMES = {
     "CHAT_MSG_WHISPER",

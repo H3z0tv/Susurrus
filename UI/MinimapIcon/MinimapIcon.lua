@@ -18,7 +18,7 @@ local MinimapIcon = {}
 -- Standard minimap button size — larger than classic 20px so the unread
 -- badge is legible, but small enough to not dominate the minimap ring.
 local ICON_SIZE = 30
-local ICON_TEXTURE = "Interface\\AddOns\\Susurrus\\Media\\icon.png"
+local ICON_TEXTURE = "Interface\\AddOns\\Susurrus\\Media\\widget_icon.png"
 local BADGE_SIZE = 14
 local BADGE_LEVEL_OFFSET = 10 -- above the pulse glow (parent + 5)
 

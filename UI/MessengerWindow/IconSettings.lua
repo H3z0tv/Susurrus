@@ -18,6 +18,7 @@ local DEFAULTS = {
   showUnreadBadge = true,
   iconSize = 42,
   iconDesaturated = true,
+  showIconBackground = false,
   lockToggleIcon = false,
   shareWidgetPosition = false,
   widgetTransparency = 0,
@@ -118,6 +119,26 @@ function IconSettings.Create(factory, parent, config, options)
   )
   iconDesaturatedToggle.row:SetPoint("TOPLEFT", iconSizeRow.row, "BOTTOMLEFT", 0, rowSpacing)
 
+  local iconBackgroundToggle = panel:bind(
+    UIHelpers.createToggleRow(
+      factory,
+      frame,
+      text("Show icon background"),
+      config.showIconBackground == true,
+      toggleColors,
+      toggleLayout,
+      function(value)
+        onChange("showIconBackground", value)
+      end,
+      {
+        text("Show icon background"),
+        text("Draws a round background and ring behind the widget icon. Off shows just the icon, with a glowing halo when a whisper arrives."),
+      }
+    ),
+    { type = "toggle", key = "showIconBackground", default = DEFAULTS.showIconBackground }
+  )
+  iconBackgroundToggle.row:SetPoint("TOPLEFT", iconDesaturatedToggle.row, "BOTTOMLEFT", 0, rowSpacing)
+
   local initialWidgetTransparency = tonumber(config.widgetTransparency)
   if initialWidgetTransparency == nil then
     initialWidgetTransparency = DEFAULTS.widgetTransparency
@@ -140,7 +161,7 @@ function IconSettings.Create(factory, parent, config, options)
     }),
     { type = "slider", key = "widgetTransparency", default = DEFAULTS.widgetTransparency }
   )
-  widgetTransparencyRow.row:SetPoint("TOPLEFT", iconDesaturatedToggle.row, "BOTTOMLEFT", 0, rowSpacing)
+  widgetTransparencyRow.row:SetPoint("TOPLEFT", iconBackgroundToggle.row, "BOTTOMLEFT", 0, rowSpacing)
 
   local lockToggleIconToggle = panel:bind(
     UIHelpers.createToggleRow(factory, frame, text("Lock icon position"), config.lockToggleIcon == true, toggleColors, toggleLayout, function(value)
@@ -319,6 +340,7 @@ function IconSettings.Create(factory, parent, config, options)
     header.hint:SetText(text("Configure icon and widget settings."))
     iconSizeRow.label:SetText(text("Icon Size"))
     iconDesaturatedToggle.label:SetText(text("Desaturate icon when idle"))
+    iconBackgroundToggle.label:SetText(text("Show icon background"))
     widgetTransparencyRow.label:SetText(text("Widget transparency"))
     lockToggleIconToggle.label:SetText(text("Lock icon position"))
     shareWidgetPositionToggle.label:SetText(text("Share widget position across characters"))

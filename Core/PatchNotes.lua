@@ -4,14 +4,10 @@ if type(ns) ~= "table" then
 end
 
 local PatchNotes = {
-  version = "0.2.0",
-  date = "2026-10-29",
+  version = "0.2.6",
+  date = "2026-11-06",
   lines = {
-    "New Susurrus Chat look, name and icon.",
-    "Whispering someone from the friends list, a chat name or a menu opens Susurrus Chat, for character friends and Battle.net friends.",
-    "New minimap button with an unread badge.",
-    "New minimize button in the title bar: tucks the window away to the minimap button.",
-    "Every option in Settings > Whispers is now on by default.",
+    "Susurrus is now All Rights Reserved. The LICENSE file, the README and the addon info are updated. Nothing changes in how the addon works.",
   },
 }
 

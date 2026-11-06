@@ -13,6 +13,7 @@ function Desaturation.Create(deps)
   local resolveColors = deps.resolveColors
   local getIconDesaturated = deps.getIconDesaturated
   local applyVertexColor = deps.applyVertexColor
+  local getDesatIconColor = deps.getDesatIconColor
 
   local lastUnreadCount = 0
   -- Snapshot original colors. Re-read on every theme refresh so preset
@@ -39,7 +40,7 @@ function Desaturation.Create(deps)
     end
 
     if shouldDesaturate then
-      applyVertexColor(textures.chatIcon, DESAT_GREY)
+      applyVertexColor(textures.chatIcon, getDesatIconColor and getDesatIconColor() or DESAT_GREY)
       applyVertexColor(textures.background, DESAT_BG)
       applyVertexColor(textures.border, DESAT_GREY)
     else

@@ -26,13 +26,14 @@ local DEFAULTS = {
   -- different value (0.70) than the declared default.
   windowOpacityInactive = 0.7,
   windowOpacityActive = 1.0,
-  fontFamily = "default",
+  fontFamily = "Poppins Medium",
   fontSize = 12,
   fontOutline = "NONE",
   fontColor = "default",
   bubbleColorPreset = "default",
-  windowScale = 1.0,
+  windowScale = 1.1,
   showPlayerLevels = false,
+  animationsEnabled = true,
 }
 
 local function pctFormat(v)
@@ -197,13 +198,33 @@ function AppearanceSettings.Create(factory, parent, config, options)
   )
   playerLevelsToggle.row:SetPoint("TOPLEFT", bubbleColorSelector.row, "BOTTOMLEFT", 0, gap)
 
+  local animationsToggle = panel:bind(
+    UIHelpers.createToggleRow(
+      factory,
+      frame,
+      text("Animations"),
+      config.animationsEnabled ~= false,
+      SettingsControls.ToggleColors(Theme),
+      { width = Theme.LAYOUT.SETTINGS_CONTROL_WIDTH, height = 24 },
+      function(v)
+        onChange("animationsEnabled", v)
+      end,
+      {
+        text("Animations"),
+        text("Fades the window in when it opens, slides switches and flashes new unread badges. Turn off for a completely static interface."),
+      }
+    ),
+    { type = "toggle", key = "animationsEnabled", default = DEFAULTS.animationsEnabled }
+  )
+  animationsToggle.row:SetPoint("TOPLEFT", playerLevelsToggle.row, "BOTTOMLEFT", 0, gap)
+
   local opacityInactiveRow = panel:bind(
     slider(text("Window Opacity (Inactive)"), 0.3, 1.0, 0.05, config.windowOpacityInactive or DEFAULTS.windowOpacityInactive, pctFormat, function(v)
       onChange("windowOpacityInactive", v)
     end),
     { type = "slider", key = "windowOpacityInactive", default = DEFAULTS.windowOpacityInactive }
   )
-  opacityInactiveRow.row:SetPoint("TOPLEFT", playerLevelsToggle.row, "BOTTOMLEFT", 0, gap)
+  opacityInactiveRow.row:SetPoint("TOPLEFT", animationsToggle.row, "BOTTOMLEFT", 0, gap)
 
   local opacityActiveRow = panel:bind(
     slider(text("Window Opacity (Active)"), 0.5, 1.0, 0.05, config.windowOpacityActive or DEFAULTS.windowOpacityActive, pctFormat, function(v)
@@ -259,6 +280,7 @@ function AppearanceSettings.Create(factory, parent, config, options)
     bubbleColorSelector.label:SetText(text("Bubble Colors"))
     bubbleColorSelector.setOptionsList(Options.BuildBubbleColorOptions())
     playerLevelsToggle.label:SetText(text("Show player levels"))
+    animationsToggle.label:SetText(text("Animations"))
     opacityInactiveRow.label:SetText(text("Window Opacity (Inactive)"))
     opacityActiveRow.label:SetText(text("Window Opacity (Active)"))
     resetButton.label:SetText(text("Reset to Defaults"))

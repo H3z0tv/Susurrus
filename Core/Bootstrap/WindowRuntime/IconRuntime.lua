@@ -103,6 +103,9 @@ function IconRuntime.Create(options)
     getIconDesaturated = function()
       return settings.iconDesaturated ~= false
     end,
+    getShowIconBackground = function()
+      return settings.showIconBackground == true
+    end,
     getWidgetTransparency = function()
       return settings.widgetTransparency or 0
     end,

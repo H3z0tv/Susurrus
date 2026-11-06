@@ -11,12 +11,13 @@ local ToggleSpecs = {}
 
 ToggleSpecs.DEFAULTS = {
   hideFromDefaultChat = true,
-  autoOpenIncoming = true,
+  autoOpenIncoming = false,
   autoOpenOutgoing = true,
   requestsInbox = true,
   shareTypingStatus = true,
   shareReadReceipts = true,
   showInviteLink = true,
+  receiveRestrictedWhispers = true,
 }
 
 local function text(key)
@@ -45,7 +46,7 @@ function ToggleSpecs.Build(config, onChange)
     {
       key = "autoOpenIncoming",
       labelKey = "Auto-open on incoming whisper",
-      initial = config.autoOpenIncoming ~= false,
+      initial = config.autoOpenIncoming == true,
       onChange = function(value)
         onChange("autoOpenIncoming", value)
       end,
@@ -114,6 +115,20 @@ function ToggleSpecs.Build(config, onChange)
       tooltipLines = {
         text("Show invite link"),
         text("Shows an (Invite to SC) link in the chat header. Clicking it whispers that player a short message about this addon."),
+      },
+    },
+    {
+      key = "receiveRestrictedWhispers",
+      labelKey = "Receive whispers from Mythic and raid fights",
+      initial = config.receiveRestrictedWhispers ~= false,
+      onChange = function(value)
+        onChange("receiveRestrictedWhispers", value)
+      end,
+      tooltipLines = {
+        text("Receive whispers from Mythic and raid fights"),
+        text(
+          "Whispers that arrive during Mythic+ and raid boss fights are saved and added to your Whispers tab once the fight is over. Turn off to leave them in the default chat only."
+        ),
       },
     },
   }

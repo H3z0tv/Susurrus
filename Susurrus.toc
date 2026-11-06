@@ -1,21 +1,11 @@
-## Interface: 120105, 16001
-## Interface-Mainline: 120105
-## Interface-Forever: 16001
-## Interface-Vanilla: 11509
-## Interface-Classic: 11509
-## Interface-TBC: 20505
-## Interface-BCC: 20505
-## Interface-Wrath: 30403
-## Interface-WOTLKC: 30403
-## Interface-Cata: 40402
-## Interface-Mists: 50504
-## Interface-MoP: 50504
+## Interface: 120105, 120100, 50504, 40402, 38002, 30405, 20506, 11509, 16001
 ## Title: Susurrus Chat
 ## Notes: Your whispers as a modern messenger - one window with history, online status and unread badges.
-## Author: H3Z0
+## Author: H3z0
+## X-License: All Rights Reserved
 ## Category: Chat
 ## IconTexture: Interface\AddOns\Susurrus\Media\icon.png
-## Version: 0.2.0
+## Version: 0.2.6
 ## SavedVariables: SusurrusDB
 ## SavedVariablesPerCharacter: SusurrusCharacterDB
 
@@ -28,6 +18,7 @@ Core/ContentDetector.lua
 Core/EventUtils.lua
 Core/BNetIdentity.lua
 Util/TableUtils.lua
+Util/Motion.lua
 Util/TimeFormat.lua
 Util/TextLimits.lua
 Util/MessageSplit.lua
@@ -46,6 +37,7 @@ Locale/ptBR.lua
 Locale/koKR.lua
 Locale/zhCN.lua
 Locale/zhTW.lua
+Locale/bgBG.lua
 Locale/Localization.lua
 
 Model/Identity/Factions.lua
@@ -95,6 +87,7 @@ Model/ContactEnricher/ContactEnricher.lua
 Persistence/Schema.lua
 Persistence/Migrations.lua
 Persistence/Helpers.lua
+Persistence/HistoryTransfer.lua
 Persistence/SavedState/LegacyMigration.lua
 Persistence/SavedState/PrefixMigration.lua
 Persistence/SavedState/SavedState.lua
@@ -325,6 +318,7 @@ UI/Shared/SettingsControls/SectionLabel.lua
 UI/Shared/SettingsControls/SliderSkin.lua
 UI/Shared/SettingsControls.lua
 UI/Shared/TwoFieldDialog.lua
+UI/Shared/HistoryTransferDialog.lua
 UI/MessengerWindow/GeneralSettings.lua
 UI/MessengerWindow/AppearanceSettings/Options.lua
 UI/MessengerWindow/AppearanceSettings.lua

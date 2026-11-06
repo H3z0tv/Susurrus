@@ -1,0 +1,37 @@
+Susurrus Chat by H3z0
+
+Susurrus 0.2.6 (2026-11-06)
+- Susurrus is now All Rights Reserved. The LICENSE file, the README and the addon info are updated. Nothing changes in how the addon works.
+
+Susurrus 0.2.5 (2026-11-05)
+- New in Settings > General: Sync Between Game Versions. Export History turns your chats into one text you can copy. Import History on another game version (Retail, WoW Forever, Classic...) merges that text into the chats you already have. Messages you already have are skipped, so importing twice changes nothing.
+- Battle.net chats line up between game versions. Character whisper chats come over too when the character name matches. Guild, party, raid and channel chats stay with their own character.
+- Import follows your Max Messages Per Chat and Message Retention settings. Raise Message Retention before importing if you want older messages to come over.
+
+Susurrus 0.2.4 (2026-11-04)
+- Susurrus now loads on every current WoW game: Retail (Midnight), WoW Forever, Classic Era with Season of Discovery and Hardcore, TBC Anniversary, Titan Reforged, Cataclysm Classic and Mists of Pandaria Classic. One download works for all of them.
+- The addon is no longer shown as out of date on any of these game versions.
+
+Susurrus 0.2.3 (2026-11-02)
+- New scroll and quill icon for the widget and the minimap button. The widget shows just the icon with no round background. It turns grey when idle, and when a whisper arrives it gets a glowing accent halo, a pulse and the unread badge.
+- New switch in Settings > Icons: Show icon background brings the round background and ring back.
+
+Susurrus 0.2.2 (2026-10-31)
+- New setting in Settings > Whispers: Receive whispers from Mythic and raid fights. On saves whispers that arrive during Mythic+ and raid boss fights and adds them to your Whispers tab after the fight. Off leaves them in the default chat only.
+- Animations: the window fades in when it opens and fades out when it closes, switches slide, and new unread badges flash.
+- New Animations switch in Settings > Appearance turns all of them off. The window still closes instantly in combat and in Mythic+.
+- Bulgarian is now available as an interface language in Settings > General.
+- New command /susurrus fade shows whether the window fade is working.
+
+Susurrus 0.2.1 (2026-10-30)
+- New defaults: Midnight theme, Native WoW HUD off, window scale 110% and the Poppins Medium font (when it is installed).
+- Auto-open on incoming whisper is now off by default. Auto-open on outgoing whisper stays on.
+- The Invite to SC whisper now includes the CurseForge download link.
+- Susurrus Chat by H3z0 now shows on the welcome screen and in General Settings.
+
+Susurrus 0.2.0 (2026-10-29)
+- New Susurrus Chat look, name and icon.
+- Whispering someone from the friends list, a chat name or a menu opens Susurrus Chat, for character friends and Battle.net friends.
+- New minimap button with an unread badge.
+- New minimize button in the title bar: tucks the window away to the minimap button.
+- Every option in Settings > Whispers is now on by default.

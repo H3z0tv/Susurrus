@@ -47,6 +47,7 @@ local isSecret = SecretValue.Is
 
 function LockdownCatcher.New(deps)
   local isMythicContent = deps.isMythicContent
+  local isEnabled = deps.isEnabled
   local now = deps.now
   local lines = {}
   local overCapLost = 0
@@ -54,6 +55,11 @@ function LockdownCatcher.New(deps)
   local catcher = {}
 
   function catcher.handle(eventName, ...)
+    -- "Receive whispers from Mythic and raid fights" is off: hold nothing, so
+    -- these whispers stay in the default chat only.
+    if isEnabled and not isEnabled() then
+      return
+    end
     local isCharacter = CHARACTER_EVENTS[eventName] == true
     if not isCharacter and not BNET_EVENTS[eventName] then
       return
@@ -113,6 +119,11 @@ function LockdownCatcher.Install(deps)
   local catcher = LockdownCatcher.New({
     isMythicContent = function()
       return Bootstrap._inMythicContent == true
+    end,
+    isEnabled = function()
+      local runtime = Bootstrap.runtime
+      local settings = runtime and runtime.accountState and runtime.accountState.settings
+      return not settings or settings.receiveRestrictedWhispers ~= false
     end,
     now = function()
       local runtime = Bootstrap.runtime

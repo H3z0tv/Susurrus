@@ -116,6 +116,7 @@ function SettingsPanels.Create(factory, options)
         windowOpacityActive = settingsConfig.windowOpacityActive,
         hudStyle = settingsConfig.hudStyle,
         showPlayerLevels = settingsConfig.showPlayerLevels,
+        animationsEnabled = settingsConfig.animationsEnabled,
       },
     },
     {
@@ -143,6 +144,7 @@ function SettingsPanels.Create(factory, options)
         shareTypingStatus = settingsConfig.shareTypingStatus,
         shareReadReceipts = settingsConfig.shareReadReceipts,
         showInviteLink = settingsConfig.showInviteLink,
+        receiveRestrictedWhispers = settingsConfig.receiveRestrictedWhispers,
       },
     },
     {
@@ -183,6 +185,7 @@ function SettingsPanels.Create(factory, options)
         showUnreadBadge = settingsConfig.showUnreadBadge,
         iconSize = settingsConfig.iconSize,
         iconDesaturated = settingsConfig.iconDesaturated,
+        showIconBackground = settingsConfig.showIconBackground,
         lockToggleIcon = settingsConfig.lockToggleIcon,
         shareWidgetPosition = settingsConfig.shareWidgetPosition,
         widgetTransparency = settingsConfig.widgetTransparency,

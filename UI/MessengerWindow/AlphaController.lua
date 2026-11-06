@@ -103,7 +103,10 @@ function AlphaController.applyWindowAlpha(frame, dimmed, windowState, alphaConfi
   end
   local activeAlpha = alphaConfig and alphaConfig.active or Theme.WINDOW_IDLE_ALPHA
   local inactiveAlpha = alphaConfig and alphaConfig.inactive or Theme.WINDOW_EXTERNAL_ACTIVITY_ALPHA
-  local targetAlpha = dimmed and inactiveAlpha or activeAlpha
+  local baseAlpha = dimmed and inactiveAlpha or activeAlpha
+  -- A window fade (Util/Motion) scales the opacity; 1 when none is running.
+  frame._wmBaseAlpha = baseAlpha
+  local targetAlpha = baseAlpha * (frame._wmFadeFactor or 1)
   local currentAlpha = AlphaController.getAlpha(frame, activeAlpha)
   if currentAlpha == targetAlpha and windowState.isDimmed == dimmed then
     return

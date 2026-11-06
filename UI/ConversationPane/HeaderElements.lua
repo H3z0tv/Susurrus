@@ -247,6 +247,15 @@ function HeaderElements.createEmptyState(pane, selectedContact, factory, nativeC
     end
   end
 
+  -- Credit line under the button; shown in every tab.
+  local credit = container:CreateFontString(nil, "OVERLAY", Theme.FONTS.system_text)
+  credit:SetPoint("TOP", button, "BOTTOM", 0, -18)
+  credit:SetJustifyH("CENTER")
+  do
+    local constants = ns.Constants or require("Susurrus.Core.Constants")
+    credit:SetText(constants.CREDIT .. "  •  v" .. constants.VERSION)
+  end
+
   if button.SetScript then
     button:SetScript("OnClick", function()
       if type(_G.StaticPopup_Show) == "function" then
@@ -271,6 +280,7 @@ function HeaderElements.createEmptyState(pane, selectedContact, factory, nativeC
   container.applyTheme = function()
     applyColor(title, Theme.COLORS.text_primary)
     applyColor(subtitle, Theme.COLORS.text_secondary)
+    applyColor(credit, Theme.COLORS.text_secondary)
     -- The Blizzard button keeps its own art and text colour.
     if buttonText then
       applyColor(buttonText, Theme.COLORS.text_primary)
@@ -281,6 +291,8 @@ function HeaderElements.createEmptyState(pane, selectedContact, factory, nativeC
   container.setMode = function(nextMode)
     mode = EMPTY_COPY[nextMode] and nextMode or "whispers"
     button:SetShown(mode == "whispers")
+    credit:ClearAllPoints()
+    credit:SetPoint("TOP", mode == "whispers" and button or subtitle, "BOTTOM", 0, mode == "whispers" and -18 or -16)
     container.setLanguage()
   end
   container.setLanguage()

@@ -16,6 +16,10 @@ function SlashCommands.Register(handlers)
       handlers.perf()
       return
     end
+    if word == "fade" and handlers.fade then
+      handlers.fade()
+      return
+    end
     if handlers.toggle then
       handlers.toggle()
     end

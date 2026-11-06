@@ -8,6 +8,7 @@ local PointerFocus = ns.MessengerWindowWindowScriptsFramePointerFocus
 local EscapeOrder = ns.MessengerWindowWindowScriptsFrameEscapeOrder or require("Susurrus.UI.MessengerWindow.WindowScripts.Frame.EscapeOrder")
 local EscapeKey = ns.MessengerWindowWindowScriptsFrameEscapeKey or require("Susurrus.UI.MessengerWindow.WindowScripts.Frame.EscapeKey")
 local PickerPopup = ns.PickerPopup or require("Susurrus.UI.Shared.PickerPopup")
+local Motion = ns.Motion or require("Susurrus.Util.Motion")
 
 local ScriptBindings = {}
 
@@ -161,7 +162,9 @@ function ScriptBindings.Bind(options)
   end
 
   if frame and frame.SetScript then
+    Motion.AttachWindowFade(frame)
     frame:SetScript("OnShow", function()
+      Motion.WindowShown(frame)
       setOutsideClickListening(true)
       startAlphaTicker()
       options.refreshWindowAlpha(true)
@@ -174,6 +177,7 @@ function ScriptBindings.Bind(options)
     end)
 
     frame:SetScript("OnHide", function()
+      Motion.WindowHidden(frame)
       escapeOrder.release()
       setOutsideClickListening(false)
       stopAlphaTicker()

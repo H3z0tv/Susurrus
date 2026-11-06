@@ -20,6 +20,32 @@ if type(_G["GetBuildInfo"]) == "function" then
 end
 FlavorCompat.isForever = type(tocVersion) == "number" and tocVersion >= FOREVER_TOC_MIN and tocVersion < FOREVER_TOC_MAX
 
+-- Readable name of the running game, for diagnostics and notes.
+-- Titan Reforged reports 3.80.x (38xxx), TBC Anniversary 2.5.x (2xxxx).
+local function flavorName()
+  if FlavorCompat.isForever then
+    return "forever"
+  end
+  if type(tocVersion) ~= "number" then
+    return FlavorCompat.isRetail and "retail" or "classic"
+  end
+  if tocVersion >= 100000 then
+    return "retail"
+  elseif tocVersion >= 50000 then
+    return "mists"
+  elseif tocVersion >= 40000 then
+    return "cata"
+  elseif tocVersion >= 30000 then
+    return "wrath"
+  elseif tocVersion >= 20000 then
+    return "tbc"
+  end
+  return "era"
+end
+
+FlavorCompat.tocVersion = tocVersion
+FlavorCompat.name = flavorName()
+
 -- Feature flags — true only on flavors that support the feature
 FlavorCompat.hasMythicPlus = FlavorCompat.isRetail and not FlavorCompat.isForever
 

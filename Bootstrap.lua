@@ -63,8 +63,8 @@ function Bootstrap.Initialize(factory, options)
   if accountState.settings.showGroupChats == nil then
     accountState.settings.showGroupChats = true
   end
-  -- Brand-new installs start on the default HUD and theme (Modern with
-  -- Azeroth on Retail and Forever) with whispers hidden from default chat.
+  -- Brand-new installs start on the default HUD (Off) and theme (Midnight)
+  -- with whispers hidden from default chat.
   -- Upgraders keep what they had.
   if freshInstall then
     accountState.settings.hideFromDefaultChat = true
@@ -79,7 +79,7 @@ function Bootstrap.Initialize(factory, options)
   Hud.Configure(accountState.settings.hudStyle)
   FirstRunTip.Announce(accountState)
   if Fonts.Initialize then
-    Fonts.Initialize(accountState.settings.fontFamily or "default")
+    Fonts.Initialize(accountState.settings.fontFamily or "Poppins Medium")
   end
   if Fonts.SetFontSize then
     Fonts.SetFontSize(accountState.settings.fontSize or 12)
@@ -232,6 +232,13 @@ function Bootstrap.Initialize(factory, options)
   SlashCommands.Register({
     toggle = runtime.toggle,
     replyToLast = ReplyToLast.Create({ runtime = runtime, windowRuntime = windowRuntime }),
+    fade = function()
+      local motion = ns.Motion
+      local window = runtime.window
+      if motion and motion.Describe then
+        ChatPrint.Print(motion.Describe(window and window.frame))
+      end
+    end,
     perf = function()
       for _, line in ipairs(PerfCounters.Lines(addonName)) do
         ChatPrint.Print(line)
